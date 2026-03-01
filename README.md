@@ -32,6 +32,8 @@ TickerTrail is India-first (`.NS`/NSE aware) and also supports US/global symbols
 ## Install
 
 ```bash
+git clone https://github.com/vsjha18/tickertrail.git
+cd tickertrail
 uv sync
 ```
 
@@ -230,12 +232,6 @@ cmp nifty goldbees hdfcbank csco 3y w
 ## Testing
 
 Run full tests with coverage:
-
-```bash
-make test
-```
-
-Equivalent direct commands:
 
 ```bash
 PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run --no-sync python -m coverage run -m unittest discover -s tests
