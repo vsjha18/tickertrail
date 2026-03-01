@@ -15,6 +15,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv --version
 ```
 
+macOS (Homebrew alternative):
+
+```bash
+brew install uv
+uv --version
+```
+
 Windows (PowerShell):
 
 ```powershell
