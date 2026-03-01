@@ -505,7 +505,7 @@ Minimum test matrix:
   - allow weekly for 2y
 
 Command:
-- `make test` (preferred; wraps coverage run + 95% `src/tickertrail/cli.py` gate)
+- `make test` (preferred; prints only `<test_id> PASS|FAIL` lines plus one final `TOTAL/PASS/FAIL` summary while enforcing 95% `src/tickertrail/cli.py` coverage gate)
 - `PYTHONPATH=src uv run --no-sync python -m coverage run -m unittest discover -s tests -q && PYTHONPATH=src uv run --no-sync python -m coverage report -m --fail-under=95 --include="src/tickertrail/cli.py"`
 
 Coverage requirement:

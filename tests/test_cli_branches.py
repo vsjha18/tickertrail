@@ -157,11 +157,15 @@ class BranchHelperTests(unittest.TestCase):
 
     @patch("tickertrail.cli._progress_stop")
     @patch("tickertrail.cli._progress_start")
-    @patch("tickertrail.cli._batch_index_snapshots", return_value={"A.NS": {"regularMarketPrice": 10.0}})
+    @patch(
+        "tickertrail.cli._batch_index_snapshots",
+        return_value={"A.NS": {"regularMarketPrice": 10.0}, "B.NS": {"regularMarketPrice": 11.0}},
+    )
     def test_fetch_group_snapshots_wraps_progress_scope(self, _mock_batch, mock_start, mock_stop):
-        snaps, passes = cli._fetch_group_snapshots_with_retries(["A.NS"])
+        snaps, passes = cli._fetch_group_snapshots_with_retries(["A.NS", "B.NS"])
         self.assertEqual(passes, 1)
         self.assertEqual(snaps["A.NS"]["regularMarketPrice"], 10.0)
+        self.assertEqual(snaps["B.NS"]["regularMarketPrice"], 11.0)
         mock_start.assert_called_once_with("Resolving snap rows")
         mock_stop.assert_called_once()
 
