@@ -50,6 +50,76 @@ relret 3mo
 corr 6mo
 ```
 
+## Mode-Aware Behavior
+
+Many commands are context-sensitive. You usually do not need arguments.
+
+### 1) Stock mode (`tickertrail>symbol>`)
+
+- Entered by typing a stock symbol (example: `infy`).
+- `quote`, `c`, `cc`, `t`, `tt` run on the active symbol.
+- `move`, `trend`, `relret` run on the active symbol.
+- `corr` needs at least two symbols, so use `corr on <code1> <code2> ...`.
+
+### 2) Index mode (`tickertrail>index>`)
+
+- Entered by typing an index alias/symbol (example: `nifty`, `it`, `^cnxit`).
+- `snap` shows constituents for supported indices.
+- `move`, `trend`, `relret`, `corr` can be run with no arguments:
+  - `move` runs over index constituents (or index fallback when constituents are unavailable).
+  - `trend` runs over index constituents (or index fallback).
+  - `relret` runs over index constituents with benchmark policy for index mode.
+  - `corr` runs over index constituents; needs at least two valid overlapping series.
+
+### 3) Watchlist mode (`<watchlist-name>>`)
+
+- Entered with `watchlist open <name>`.
+- `move`, `trend`, `relret`, `corr` with no arguments run on symbols in that watchlist.
+- `snap` shows the current watchlist snapshot.
+
+### 4) Explicit override mode (`on ...`)
+
+- Works from any context.
+- `move on <codes...> [period]`
+- `trend on <codes...>`
+- `relret on <codes...> [period] [vs <benchmark> [period]]`
+- `corr on <codes...> [period]`
+
+## Defaults And No-Arg Behavior
+
+### Analytics defaults
+
+- `move` default period: `1mo`
+- `trend`: no period argument
+- `relret` / `rr` default period: `1mo`
+- `corr` default period: `1mo`
+
+### `relret` benchmark defaults
+
+- Watchlist mode: benchmark defaults to `NIFTY 50 (^NSEI)`
+- Index mode: benchmark defaults by active index context
+- Explicit `relret on ...`: default benchmark is `NIFTY 50 (^NSEI)`
+- `vs <benchmark>` overrides default benchmark selection
+
+### Chart/table defaults
+
+- `c` default period: `6mo` (default interval auto-selected from period)
+- `t` default period: `6mo` (default interval auto-selected from period)
+- `cc` default interval: `5m`
+- `tt` default interval: `5m`
+- `cmp` default period: `6mo` (with auto interval)
+
+### Common no-arg commands
+
+- `move` -> `move 1mo` in index/watchlist contexts
+- `trend` -> trend board for current context (index/watchlist/symbol)
+- `relret` / `rr` -> `relret 1mo` for current context
+- `corr` -> `corr 1mo` in index/watchlist contexts
+- `c` -> swing chart for active symbol (6mo defaults)
+- `t` -> rebased table for active symbol (6mo defaults)
+- `cc` -> intraday chart for active symbol (`5m`)
+- `tt` -> intraday table for active symbol (`5m`)
+
 ## Command Output Examples
 
 These snippets are captured from the real CLI renderers with fixed sample data, so the formatting matches actual command output.
