@@ -26,6 +26,8 @@ Core commands:
 - `quit` / `exit`: leave REPL.
 - `cls`/`clear`: clear terminal screen (must not trigger symbol resolution).
 - `!<shell-cmd>`: pass command to underlying shell from REPL.
+- `cache`: print today's persisted history-cache summary (path, counts, symbols, dimensions).
+- `cache clear`: clear only today's persisted history cache bucket.
 - `reload` / `r`: refresh active quote and replay last chart/table view.
 - `cd ..`: return to the last exited index/watchlist mode without symbol re-resolution.
 - `index`: live market board with India + Global sections.
@@ -464,6 +466,7 @@ corr behavior:
 Implement REPL controller with:
 - command dispatch order (help/index/t/cc/c/period-shortcut/symbol switch)
 - persistent history via readline + local history file
+- `cache` command that prints today's persisted history-cache summary (path, counts, symbols, dimensions)
 - `cache clear` command that clears only today's persisted history cache bucket
 - `news <code>` command that resolves one symbol and prints recent Yahoo headlines
 - `moves [period]` command for watchlist/index contexts with default `1mo`

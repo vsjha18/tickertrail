@@ -348,6 +348,8 @@ Final           118.48      126.02      122.63
 
 - `h` / `help [topic|command]`: help system
 - `quote` / `q`: show active symbol/index quote
+- `cache`: show today's persisted history-cache summary
+- `cache clear`: clear today's persisted history cache bucket
 - `reload` / `r`: refresh quote and replay last chart/table
 - `cd ..`: return to previous index/watchlist context
 - `cls` / `clear`: clear terminal

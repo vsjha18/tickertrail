@@ -179,6 +179,34 @@ class DailyHistoryCacheTests(unittest.TestCase):
         price_history.reset_cache_metrics()
         self.assertEqual(price_history.cache_metrics_snapshot(), {"hits": 0, "misses": 0})
 
+    def test_history_cache_summary_today_reports_kind_symbol_period_interval_counts(self) -> None:
+        """Cache summary should expose parsed dimensions for today's in-memory cache keys."""
+        old_dir = price_history._CACHE_DIR
+        old_day = price_history._CACHE_DAY
+        old_store = price_history._CACHE_STORE
+        try:
+            price_history._CACHE_DIR = Path("/tmp")
+            price_history._CACHE_DAY = "2026-03-01"
+            price_history._CACHE_STORE = {
+                "close_points|INFY.NS|1mo|1d": {"points": [], "prices": []},
+                "close_points|TCS.NS|1y|1wk": {"points": [], "prices": []},
+                "daily_ohlcv|INFY.NS|1y|1d": {"points": [], "close": [], "high": [], "low": [], "volume": []},
+                "bad-key": {},
+            }
+            with patch("tickertrail.price_history._cache_day", return_value="2026-03-01"):
+                summary = price_history.history_cache_summary_today()
+            self.assertEqual(summary["day"], "2026-03-01")
+            self.assertEqual(summary["entries_total"], 4)
+            self.assertEqual(summary["entries_parsed"], 3)
+            self.assertEqual(summary["kinds"], {"close_points": 2, "daily_ohlcv": 1})
+            self.assertEqual(summary["symbols"], ["INFY.NS", "TCS.NS"])
+            self.assertEqual(summary["periods"], ["1mo", "1y"])
+            self.assertEqual(summary["intervals"], ["1d", "1wk"])
+        finally:
+            price_history._CACHE_DIR = old_dir
+            price_history._CACHE_DAY = old_day
+            price_history._CACHE_STORE = old_store
+
 
 if __name__ == "__main__":
     unittest.main()

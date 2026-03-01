@@ -524,6 +524,45 @@ def _print_network_call_metrics() -> None:
     print(f"Network calls: {total} [{details}]{cache_suffix}")
 
 
+def _print_history_cache_summary() -> None:
+    """Print a compact summary of today's persisted history cache contents."""
+    summary = price_history.history_cache_summary_today()
+    kinds = dict(summary.get("kinds") or {})
+    symbols = list(summary.get("symbols") or [])
+    periods = list(summary.get("periods") or [])
+    intervals = list(summary.get("intervals") or [])
+    entries_total = int(summary.get("entries_total") or 0)
+    entries_parsed = int(summary.get("entries_parsed") or 0)
+    path = str(summary.get("path") or "n/a")
+    file_exists = bool(summary.get("file_exists"))
+    file_size = int(summary.get("file_size_bytes") or 0)
+    day = str(summary.get("day") or "n/a")
+
+    print("\nHistory Cache Summary")
+    print("=====================")
+    print(f"Day: {day}")
+    print(f"Path: {path}")
+    print(f"File: {'present' if file_exists else 'missing'} ({file_size} bytes)")
+    print(f"Entries: {entries_total} total ({entries_parsed} parsed keys)")
+
+    if kinds:
+        kind_bits = [f"{kind}={count}" for kind, count in sorted(kinds.items())]
+        print(f"Kinds: {', '.join(kind_bits)}")
+    else:
+        print("Kinds: none")
+
+    if symbols:
+        shown = ", ".join(symbols[:8])
+        suffix = "" if len(symbols) <= 8 else f", ... (+{len(symbols) - 8} more)"
+        print(f"Symbols ({len(symbols)}): {shown}{suffix}")
+    else:
+        print("Symbols: none")
+
+    print(f"Periods: {', '.join(periods) if periods else 'none'}")
+    print(f"Intervals: {', '.join(intervals) if intervals else 'none'}")
+    print()
+
+
 def _progress_enabled() -> bool:
     """Return True when lightweight progress rendering should be shown."""
     return bool(getattr(sys.stderr, "isatty", lambda: False)())
@@ -2967,6 +3006,7 @@ def _run_repl(
             print("  reload | r                  Refresh quote + replay last chart/table")
             print("  cd ..                       Return to last index/watchlist mode")
             print("  !<shell-cmd>                Run shell command")
+            print("  cache                       Show today's persisted history cache summary")
             print("  cache clear                 Clear today's persisted history cache")
             print()
             print("Analytics:")
@@ -3022,6 +3062,7 @@ def _run_repl(
                 print("  reload | r")
                 print("  cd ..")
                 print("  !<shell-cmd>")
+                print("  cache")
                 print("  cache clear")
                 print("  code <query>")
                 print("  news <code>")
@@ -3119,6 +3160,7 @@ def _run_repl(
             "exit": "quit",
             "cls": "clear",
             "clear": "clear",
+            "cache": "cache",
             "cache clear": "cache clear",
             "reload": "reload",
             "r": "reload",
@@ -3218,6 +3260,18 @@ def _run_repl(
                 usage_lines=["clear"],
                 detail_lines=["Clear terminal screen and keep REPL session active."],
                 example_lines=["clear"],
+            )
+            return
+        if canonical == "cache":
+            _print_command_help(
+                command="cache",
+                aliases=[],
+                usage_lines=["cache", "cache clear"],
+                detail_lines=[
+                    "Shows today's persisted history cache summary (path, entry count, kinds, symbols).",
+                    "`cache clear` deletes only today's persisted history cache bucket.",
+                ],
+                example_lines=["cache", "cache clear"],
             )
             return
         if canonical == "cache clear":
@@ -3664,13 +3718,19 @@ def _run_repl(
             # ANSI clear-screen + cursor-home; keep REPL session active.
             print("\033[2J\033[H", end="")
             continue
-        if lower == "cache clear":
-            # Keep cache control explicit and scoped: only today's history cache bucket is flushed.
-            deleted = price_history.clear_history_cache_today()
-            if deleted:
-                print("Cleared today's history cache.")
+        if lower == "cache" or lower.startswith("cache "):
+            # Decision block: keep cache grammar explicit to avoid ambiguous symbol parsing.
+            if lower == "cache":
+                _print_history_cache_summary()
+            elif lower == "cache clear":
+                # Keep cache control explicit and scoped: only today's history cache bucket is flushed.
+                deleted = price_history.clear_history_cache_today()
+                if deleted:
+                    print("Cleared today's history cache.")
+                else:
+                    print("Today's history cache is already empty.")
             else:
-                print("Today's history cache is already empty.")
+                print("Usage: cache | cache clear", file=sys.stderr)
             continue
         if cmd.startswith("!"):
             shell_cmd = cmd[1:].strip()

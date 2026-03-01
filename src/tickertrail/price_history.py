@@ -131,6 +131,43 @@ def clear_history_cache_today() -> bool:
         return False
 
 
+def history_cache_summary_today() -> dict[str, Any]:
+    """Return a structured summary of today's persisted history cache contents."""
+    _cache_refresh_day()
+    assert _CACHE_STORE is not None
+    day = _CACHE_DAY or _cache_day()
+    path = _cache_path_for_day(day)
+    kinds: dict[str, int] = {}
+    symbols: set[str] = set()
+    periods: set[str] = set()
+    intervals: set[str] = set()
+    parsed_entries = 0
+
+    for key in _CACHE_STORE:
+        parts = key.split("|")
+        if len(parts) != 4:
+            continue
+        kind, symbol, period_token, interval = parts
+        parsed_entries += 1
+        kinds[kind] = kinds.get(kind, 0) + 1
+        symbols.add(symbol)
+        periods.add(period_token)
+        intervals.add(interval)
+
+    return {
+        "day": day,
+        "path": str(path),
+        "file_exists": path.exists(),
+        "file_size_bytes": (path.stat().st_size if path.exists() else 0),
+        "entries_total": len(_CACHE_STORE),
+        "entries_parsed": parsed_entries,
+        "kinds": kinds,
+        "symbols": sorted(symbols),
+        "periods": sorted(periods),
+        "intervals": sorted(intervals),
+    }
+
+
 def fetch_close_points_for_token(
     symbol: str,
     period_token: str,

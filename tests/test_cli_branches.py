@@ -2053,6 +2053,7 @@ class BranchRenderAndReplTests(unittest.TestCase):
             "help help",
             "help q",
             "help cls",
+            "help cache",
             "help cache clear",
             "help reload",
             "help r",
