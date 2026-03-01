@@ -6,6 +6,24 @@ It is optimized for India-first workflows (`.NS`/NSE aware) and also supports gl
 
 ## Quick Start
 
+Install `uv` first (if not already installed):
+
+macOS / Linux:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv --version
+```
+
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+uv --version
+```
+
+Then clone and run:
+
 ```bash
 git clone https://github.com/vsjha18/tickertrail.git
 cd tickertrail
