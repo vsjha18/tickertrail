@@ -121,12 +121,15 @@ RELIANCE.NS <-> TCS.NS     +0.04
 ```text
 tickertrail> snap
 
-NIFTY 50 Snapshot
-Symbol               LTP       1D
-RELIANCE.NS        2875.40   +0.64%
-HDFCBANK.NS        1672.55   -0.21%
-INFY.NS            1941.20   +1.03%
+Snap: NIFTY IT (10 constituents)
+Symbol                    Price             Change              Range
+MPHASIS.NS             2,296.50    +35.00 (+1.55%)     [──●─────────]
+HCLTECH.NS             1,389.10    +15.60 (+1.14%)     [───●────────]
+OFSS.NS                6,932.00    +75.50 (+1.10%)     [───────●────]
+INFY.NS                1,300.10    +11.00 (+0.85%)     [──●─────────]
+WIPRO.NS                 200.96     -0.12 (-0.06%)     [───●────────]
 ...
+Snap fetch passes used: 1
 ```
 
 ### Swing Chart (`c`)
