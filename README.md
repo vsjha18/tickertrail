@@ -52,68 +52,80 @@ corr 6mo
 
 ## Command Output Examples
 
-These are representative REPL snippets so users can see output shape before running commands.
+These snippets are captured from the real CLI renderers with fixed sample data, so the formatting matches actual command output.
 
 ### Quote
 
 ```text
-tickertrail> reliance
-RELIANCE.NS | Reliance Industries Ltd.
-Price: 2,875.40  (+18.20, +0.64%)
-Open: 2,851.00   High: 2,882.90   Low: 2,846.50
-52W: 2,221.05 - 3,025.00
+tickertrail> quote
+
+INFY.NS  Infosys Ltd.  [INR]
+Px 1,941.20  Chg +19.80 (+1.03%)  O 1,928.00  L/H 1,918.10/1,952.30
+Vol 8.23M  MCap 8.04T  Updated 02-03-26 02:04:28
+Day Range  [──────────────────────────●─────────────]  1,918.10 .. 1,952.30
+52W Range  [──────────────────────────────────●─────]  1,380.20 .. 2,015.80
+30D Moves  oooooooooooooooooooooooooooooo
+Returns    7D +0.85%  1MO +4.78%  3MO +18.69%  6MO +46.30%  9MO +92.17%  1Y n/a
+Signal     TrendScore 5/5  RSI14 100.0  Vol/20D 1.02x
+Risk       MaxDD(1Y) +0.00%  WinRate(1Y) 100.00%
+Extremes   Best +0.73% (03-03-25)  Worst +0.09% (28-02-26)  Skew n/a
+PE(TTM) 30.80 | PEG 2.10 | ROE 30.20%
 ```
 
 ### Move Board
 
 ```text
-tickertrail> move 1mo
+tickertrail> move on infy tcs reliance 1mo
 
-Directional Move (1MO) - Watchlist swing
-Symbol               Green/Red   Move Dots
-TCS.NS                 14/8      ●●●●●●○●●○●●●○●●○●●○●●
-INFY.NS                12/10     ●●○●○●○●●○●○●●○●○●●○●○
-RELIANCE.NS            10/12     ○●○●○○●○●○○●○●○○●○●○○●
+Moves (1MO) - Explicit symbols
+Symbol           1MO Moves    Dots
+INFY.NS          1MO Moves    oooooooooooooooooooooooooooooo
+TCS.NS           1MO Moves    oooooooooooooooooooooooooooooo
+RELIANCE.NS      1MO Moves    oooooooooooooooooooooooooooooo
 ```
 
 ### Trend Board
 
 ```text
-tickertrail> trend
+tickertrail> trend on infy tcs reliance
 
-Trend (Current) - Watchlist swing
-Symbol               Score
-TCS.NS               3.0/4
-INFY.NS              2.0/4
-RELIANCE.NS          1.0/4
+Trend (Current) - Explicit symbols
+Symbol           Trend Score
+INFY.NS          5.0/5.0
+TCS.NS           5.0/5.0
+RELIANCE.NS      5.0/5.0
 ```
 
 ### Relative Return
 
 ```text
-tickertrail> rr 3mo
+tickertrail> rr on infy tcs reliance vs nifty 1mo
 
-Relative Return (3MO) - Watchlist swing vs NIFTY 50 (^NSEI)
+Relative Return (1MO) - Explicit symbols vs NIFTY 50 (^NSEI)
 Symbol               Return      Bench     RelRet
-TCS.NS               +8.14%     +3.72%    +4.42%
-INFY.NS              +5.09%     +3.72%    +1.37%
-RELIANCE.NS          +1.88%     +3.72%    -1.84%
+INFY.NS             +15.13%    +12.06%     +3.07%
+RELIANCE.NS         +13.24%    +12.06%     +1.18%
+TCS.NS              +10.86%    +12.06%     -1.20%
 ```
 
 ### Correlation Summary
 
 ```text
-tickertrail> corr 6mo
+tickertrail> corr on infy tcs reliance 1mo
 
-Correlation (6MO) - Watchlist swing
-Top Positive:
-TCS.NS <-> INFY.NS         +0.82
+Correlation Summary (1MO) - Explicit symbols
+Universe: 3 symbols | overlap points: 29
 
-Top Negative:
-RELIANCE.NS <-> INFY.NS    -0.21
+Most Positive Pairs
+TCS.NS <-> RELIANCE.NS               +1.00
+INFY.NS <-> RELIANCE.NS              +1.00
+INFY.NS <-> TCS.NS                   +1.00
 
-Near Zero (Diversifiers):
-RELIANCE.NS <-> TCS.NS     +0.04
+Most Negative Pairs
+n/a
+
+Near-Zero Pairs (Diversifiers)
+n/a
 ```
 
 ### Snapshot
@@ -123,11 +135,11 @@ tickertrail> snap
 
 Snap: NIFTY IT (10 constituents)
 Symbol                    Price             Change              Range
-MPHASIS.NS             2,296.50    +35.00 (+1.55%)     [──●─────────]
-HCLTECH.NS             1,389.10    +15.60 (+1.14%)     [───●────────]
-OFSS.NS                6,932.00    +75.50 (+1.10%)     [───────●────]
-INFY.NS                1,300.10    +11.00 (+0.85%)     [──●─────────]
-WIPRO.NS                 200.96     -0.12 (-0.06%)     [───●────────]
+TCS.NS                 1,010.00     +0.80 (+0.08%)     [─────●──────]
+LTIM.NS                1,070.00     +0.80 (+0.07%)     [──────●─────]
+PERSISTENT.NS            920.00     +0.50 (+0.05%)     [──────●─────]
+INFY.NS                1,070.00     +0.50 (+0.05%)     [──────●─────]
+HCLTECH.NS               940.00     +0.20 (+0.02%)     [──────●─────]
 ...
 Snap fetch passes used: 1
 ```
@@ -137,15 +149,29 @@ Snap fetch passes used: 1
 ```text
 tickertrail> c 6mo
 
-RELIANCE.NS vs NIFTY 50 | 6MO | 1d
- 122 |                              *  *
- 116 |                         *  *      *
- 110 |                    *  *            *
- 104 |               *  *                  *
-  98 |          *  *                        *
-  92 |     *  *                              *
-      -----------------------------------------
-       Jan      Feb      Mar      Apr      May
+^CNXIT close (6mo, 1d)  +68.71 (+47.72%)
+     ┌─────────────────────────────────────────────────────────────────────────┐
+246.3┼───────────────────────────────────────────────────────────────────────••┤
+     │                                                                •••••••  │
+231.7┼────────────────────────────────────────────────────────────•••••────────┤
+     │                                                       ••••••            │
+217.0┼──────────────────────────────────────────────────•••••──────────────────┤
+     │                                            ••••••               ▗▄▄▄▄▞▀•│
+202.4┼───────────────────────────────────────•••••───────────────▄▄▄▞▀▀▘───────┤
+     └┬───────┬───────┬───────────────┬───────┬───────┬───────────────┬────────┘
+   03-09-25 23-09-25 13-10-25     21-11-25  11-12-25 31-12-25     09-02-26
+
+Rebased Co-Plot (base=100): ^CNXIT vs NIFTY 50 [6mo, 1d]
+Date Range: 03-09-25 -> 01-03-26
+Date           Stock     Bench     Delta    Alpha%
+03-09-25      100.00    100.00     +0.00    +0.00%
+09-10-25      109.03    113.64     -4.61    -4.06%
+14-11-25      119.62    129.05     -9.43    -7.31%
+...
+Final Relative (Stock - Bench): -23.30
+Final Alpha% (Stock vs Bench): -13.62%
+Range: 144.00 - 212.71 | Last: 212.71
+Move: +68.71 (+47.72%) | From: 03-09-25 -> 01-03-26
 ```
 
 ### Intraday Chart (`cc`)
@@ -153,14 +179,27 @@ RELIANCE.NS vs NIFTY 50 | 6MO | 1d
 ```text
 tickertrail> cc 5m
 
-RELIANCE.NS | 1D | 5m
- 2890 |                 * *
- 2884 |              * *   * *
- 2878 |           * *         *
- 2872 |        * *             *
- 2866 |     * *                 *
-       ----------------------------
-        10:00 11:00 12:00 13:00
+^CNXIT close (1d, 5m)  +7.21 (+0.50%)
+      ┌────────────────────────────────────────────────────────────────────────┐
+1448.3┼────────────────────────────•••─────────────────────────────────────────┤
+      │                           ••▀•                                         │
+1446.6┼──────•───────────────────▗•────────────────────────────────────────────┤
+      │    ••▄••                ••                                             │
+1444.8┼───••───▚•───────────────•──────────────────────────────────────────────┤
+      │  •▘     ••             •▘                                              │
+1435.9┼────────────────••••────────────────────────────────────────────────────┤
+      └┬───────────────────────────────────┬──────────────────────────────────┬┘
+     05:55                               10:45                            15:30
+
+Rebased Co-Plot (base=100): ^CNXIT vs NIFTY 50 [1d, 5m]
+Date Range: 05:55 -> 10:00
+Date           Stock     Bench     Delta    Alpha%
+05:55         100.00    100.00     +0.00    +0.00%
+06:45         100.38    100.43     -0.05    -0.05%
+...
+Final Relative (Stock - Bench): -0.07
+Final Alpha% (Stock vs Bench): -0.07%
+Move: +7.21 (+0.50%) | From: 05:55 -> 10:00
 ```
 
 ### Swing Table (`t`)
@@ -168,13 +207,15 @@ RELIANCE.NS | 1D | 5m
 ```text
 tickertrail> t 1y
 
-RELIANCE.NS vs NIFTY 50 | 1Y | 1wk
-Date         StockIdx   BenchIdx   Delta
-2025-03-01    100.00     100.00    +0.00
-2025-06-01    108.42     104.15    +4.27
-2025-09-01    112.36     109.02    +3.34
-2025-12-01    118.51     113.27    +5.24
-2026-03-01    121.08     116.44    +4.64
+Rebased Co-Plot (base=100): ^CNXIT vs NIFTY 50 [1y, 1mo]
+Date Range: 05-04-25 -> 01-03-26
+Date           Stock     Bench     Delta    Alpha%
+05-04-25      100.00    100.00     +0.00    +0.00%
+05-05-25      100.44    100.59     -0.15    -0.15%
+04-06-25      100.87    101.17     -0.30    -0.30%
+...
+Final Relative (Stock - Bench): -1.43
+Final Alpha% (Stock vs Bench): -1.37%
 ```
 
 ### Intraday Table (`tt`)
@@ -182,13 +223,15 @@ Date         StockIdx   BenchIdx   Delta
 ```text
 tickertrail> tt 15m
 
-RELIANCE.NS vs NIFTY 50 | 1D | 15m
-Time         StockIdx   BenchIdx   Delta
-09:30         100.00     100.00    +0.00
-10:30         100.28      99.92    +0.36
-11:30         100.11      99.88    +0.23
-12:30         100.45      99.97    +0.48
-13:30         100.62     100.03    +0.59
+Rebased Co-Plot (base=100): ^CNXIT vs NIFTY 50 [1d, 15m]
+Date Range: 21:45 -> 10:00
+Date           Stock     Bench     Delta    Alpha%
+21:45         100.00    100.00     +0.00    +0.00%
+00:15         100.38    100.43     -0.05    -0.05%
+02:45         100.00    100.00     -0.00    -0.00%
+...
+Final Relative (Stock - Bench): -0.07
+Final Alpha% (Stock vs Bench): -0.07%
 ```
 
 ### Multi-Symbol Compare (`cmp`)
@@ -196,13 +239,14 @@ Time         StockIdx   BenchIdx   Delta
 ```text
 tickertrail> cmp tcs infy reliance 1y w
 
-Compare (rebased=100) | 1Y | 1wk
-Date         TCS.NS    INFY.NS   RELIANCE.NS
-2025-03-01   100.00    100.00      100.00
-2025-06-01   106.21    104.88      108.42
-2025-09-01   109.74    107.01      112.36
-2025-12-01   113.56    109.92      118.51
-2026-03-01   117.08    112.44      121.08
+Compare (base=100): TCS.NS, INFY.NS, RELIANCE.NS [1y, 1wk]
+Date Range: 09-03-25 -> 01-03-26
+Date            TCS.NS     INFY.NS RELIANCE.NS
+09-03-25        100.00      100.00      100.00
+18-05-25        103.72      105.19      104.53
+27-07-25        106.45      109.45      108.04
+...
+Final           118.48      126.02      122.63
 ```
 
 ## REPL Basics
