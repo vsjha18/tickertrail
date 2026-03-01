@@ -2,7 +2,7 @@
 
 Terminal-first stock CLI for quotes, charts, benchmarked performance tables, index snapshots, and persistent watchlists.
 
-TickerTrail is India-first (`.NS`/NSE aware) and also supports US/global symbols and benchmarks through Yahoo Finance (`yfinance`).
+TickerTrail is India-first (`.NS`/NSE aware) and also supports US/global symbols and benchmarks through its configured market data provider.
 
 ## Highlights
 
@@ -84,9 +84,9 @@ Date format in output is `dd-mm-yy`.
 - `trend`: current trend-score board (alias: `trends`, no args)
 - `relret [7d|1mo|3mo|6mo|9mo|1y]`: relative-return ranking (default `1mo`)
 - `corr [1mo|3mo|6mo|9mo|1y]`: correlation summary of daily returns (default `1mo`)
-- `news <code>`: recent Yahoo Finance headlines for one symbol (best-effort; availability varies by ticker/region)
+- `news <code>`: recent market headlines for one symbol (best-effort; availability varies by ticker/region)
   - Shows publish time in local timezone plus relative age when timestamp metadata is available.
-  - Timestamp extraction checks both top-level and nested Yahoo news payload fields.
+  - Timestamp extraction checks both top-level and nested news payload fields.
   - Renders newest timestamped headlines first in compact bullets: `(age) headline` + link, separated by one blank line.
   - Applies subtle ANSI coloring for headlines/links when terminal color is supported.
   - Supports index aliases directly (for example: `news nifty`, `news it`, `news metals`, `news consumer`, `news dow`).
@@ -96,7 +96,7 @@ Date format in output is `dd-mm-yy`.
 
 - `<symbol>`: switch active symbol and print quote
 - `code <query>`: fuzzy ticker lookup from local NSE universe data
-- `news <code>`: fetch latest symbol headlines from Yahoo Finance
+- `news <code>`: fetch latest symbol headlines
 
 ### Index Tools
 
@@ -108,7 +108,7 @@ Date format in output is `dd-mm-yy`.
 - `trend`: current trend-score board for active index (constituents when available; otherwise index symbol)
 - `relret [7d|1mo|3mo|6mo|9mo|1y]`: relative-return ranking for active index scope
 - `corr [1mo|3mo|6mo|9mo|1y]`: return-correlation summary for active index scope
-- Index alias switching now restores quote output via snapshot fallback when Yahoo index `Ticker` payload is sparse (for example `it`, `nifty`, `metal`, `metals`).
+- Index alias switching now restores quote output via snapshot fallback when index `Ticker` payload is sparse (for example `it`, `nifty`, `metal`, `metals`).
 - `index` highlights the first three `NIFTY 50` row columns (`Index`, `Ticker`, `Price`) for quick visual scanning in sorted output.
 - `relret` canonicalizes index fallback symbols (for example `NIFTY_NEXT_50.NS` -> `^NIFTYNXT50`) before benchmark history fetch.
 - `relret` benchmark policy: watchlist mode always uses `^NSEI` (NIFTY 50); index mode uses the active index itself as benchmark.
@@ -156,7 +156,7 @@ Canonical command family is `watchlist ...`; alias `wl ...` is fully supported.
 
 In watchlist mode (`<name>>` prompt):
 
-- `add <code...>`: add symbols (validated via local NSE CSV; no Yahoo call for validation)
+- `add <code...>`: add symbols (validated via local NSE CSV; no network call for validation)
 - `delete <code...>`: remove symbols
 - `list` / `ll`: show current symbols
 - `snap`: watchlist snapshot board
@@ -201,7 +201,7 @@ cmp nifty goldbees hdfcbank csco 3y w
 
 ## Data + Storage
 
-- Market data source: Yahoo Finance via `yfinance`
+- Market data source: configured provider
 - Local symbol universe: `data/nse_equity_list.csv`
 - Index constituents: `data/index_constituents.csv`
 - Watchlist DB: `data/db.json`
@@ -243,5 +243,5 @@ Current policy target is at least `95%` coverage for `src/tickertrail/cli.py`.
 ## Notes
 
 - `Ticker.info` and `download/history` can occasionally return partial/missing fields; CLI falls back where possible.
-- Intraday availability and index symbol behavior depend on Yahoo data constraints.
+- Intraday availability and index symbol behavior depend on provider data constraints.
 - Network latency is usually the largest source of runtime delay.
