@@ -2357,6 +2357,136 @@ def _parse_moves_period(args: list[str]) -> tuple[str | None, str | None]:
     return token, None
 
 
+def _parse_scope_override_with_period(
+    args: list[str],
+    *,
+    command_name: str,
+    period_tokens: set[str],
+    default_period: str,
+) -> tuple[list[str] | None, str | None, str | None]:
+    """Parse optional `on <codes...> [period]` grammar for analytics commands."""
+    period_hint = "|".join(sorted(period_tokens, key=lambda token: (_period_token_days(token) or 0, token)))
+    usage = f"Usage: {command_name} [{period_hint}] | {command_name} on <code1> <code2> ... [{period_hint}]"
+    cleaned = [token.strip() for token in args if token.strip()]
+    if not cleaned:
+        return None, default_period, None
+
+    if cleaned[0].lower() != "on":
+        if len(cleaned) != 1:
+            return None, None, usage
+        token = _normalize_period_token(cleaned[0])
+        if token is None or token not in period_tokens:
+            return None, None, usage
+        return None, token, None
+
+    if len(cleaned) < 2:
+        return None, None, usage
+
+    # Decision block: when `on` is present, parse symbols first and treat a valid trailing
+    # period token as optional override. Any invalid trailing period-like token is rejected.
+    symbol_inputs = cleaned[1:]
+    period_token = default_period
+    if len(symbol_inputs) > 1:
+        maybe_period = _normalize_period_token(symbol_inputs[-1])
+        if maybe_period in period_tokens:
+            period_token = maybe_period
+            symbol_inputs = symbol_inputs[:-1]
+        elif maybe_period is not None:
+            return None, None, usage
+    if not symbol_inputs:
+        return None, None, usage
+    return symbol_inputs, period_token, None
+
+
+def _parse_scope_override_no_period(
+    args: list[str],
+    *,
+    command_name: str,
+) -> tuple[list[str] | None, str | None]:
+    """Parse optional `on <codes...>` grammar for no-period analytics commands."""
+    usage = f"Usage: {command_name} | {command_name} on <code1> <code2> ..."
+    cleaned = [token.strip() for token in args if token.strip()]
+    if not cleaned:
+        return None, None
+    if cleaned[0].lower() != "on" or len(cleaned) < 2:
+        return None, usage
+    return cleaned[1:], None
+
+
+def _parse_relret_args(args: list[str]) -> tuple[list[str] | None, str | None, str | None, str | None]:
+    """Parse `relret` grammar with optional explicit symbols and benchmark override.
+
+    Supported forms:
+    - `relret [period] [vs <benchmark>]`
+    - `relret [period] vs <benchmark> [period]`
+    - `relret on <code1> <code2> ... [period] [vs <benchmark> [period]]`
+    """
+    usage = (
+        "Usage: relret [7d|1mo|3mo|6mo|9mo|1y] [vs <benchmark>] | "
+        "relret on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|1y] [vs <benchmark>]"
+    )
+    cleaned = [token.strip() for token in args if token.strip()]
+    if not cleaned:
+        return None, "1mo", None, None
+
+    benchmark_input: str | None = None
+    period_after_vs: str | None = None
+    head_tokens = cleaned
+    if "vs" in (token.lower() for token in cleaned):
+        # Decision block: keep `vs` syntax explicit and deterministic with one benchmark token,
+        # with optional trailing period token after benchmark.
+        vs_positions = [idx for idx, token in enumerate(cleaned) if token.lower() == "vs"]
+        if len(vs_positions) != 1:
+            return None, None, None, usage
+        vs_idx = vs_positions[0]
+        tail = cleaned[vs_idx + 1 :]
+        if len(tail) not in {1, 2}:
+            return None, None, None, usage
+        benchmark_input = tail[0]
+        if benchmark_input.lower() == "vs":
+            return None, None, None, usage
+        if len(tail) == 2:
+            maybe_period = _normalize_period_token(tail[1])
+            if maybe_period is None or maybe_period not in _MOVES_PERIODS:
+                return None, None, None, usage
+            period_after_vs = maybe_period
+        head_tokens = cleaned[:vs_idx]
+
+    if not head_tokens:
+        if period_after_vs is None:
+            # relret vs <benchmark>
+            return None, "1mo", benchmark_input, None
+        # relret vs <benchmark> <period>
+        return None, period_after_vs, benchmark_input, None
+
+    if head_tokens[0].lower() == "on":
+        if len(head_tokens) < 2:
+            return None, None, None, usage
+        symbol_tokens = head_tokens[1:]
+        period_token = period_after_vs or "1mo"
+        if len(symbol_tokens) > 1:
+            maybe_period = _normalize_period_token(symbol_tokens[-1])
+            if maybe_period in _MOVES_PERIODS:
+                if period_after_vs is not None:
+                    return None, None, None, usage
+                period_token = maybe_period
+                symbol_tokens = symbol_tokens[:-1]
+            elif maybe_period is not None:
+                return None, None, None, usage
+        if not symbol_tokens:
+            return None, None, None, usage
+        return symbol_tokens, period_token, benchmark_input, None
+
+    if len(head_tokens) > 1:
+        return None, None, None, usage
+    token = _normalize_period_token(head_tokens[0])
+    if token is None or token not in _MOVES_PERIODS:
+        return None, None, None, usage
+    if period_after_vs is not None:
+        return None, None, None, usage
+    return None, token, benchmark_input, None
+
+
 def _parse_corr_period(args: list[str]) -> tuple[str | None, str | None]:
     """Parse `corr` period argument and enforce supported horizons."""
     if len(args) > 1:
@@ -2413,16 +2543,34 @@ def _print_relret_snapshot(
     current_symbol: str | None,
     active_watchlist: str | None,
     period_token: str,
+    explicit_symbols: list[str] | None = None,
+    benchmark_input: str | None = None,
 ) -> int:
-    """Print relative-return ranking for watchlist/index context over one period."""
-    title, symbols = _moves_targets_for_context(current_symbol=current_symbol, active_watchlist=active_watchlist)
-    if title is None or symbols is None:
-        return 3
+    """Print relative-return ranking for watchlist/index context or explicit symbol basket."""
+    if explicit_symbols is not None:
+        symbols = _resolve_analytics_symbol_inputs(explicit_symbols)
+        if symbols is None:
+            return 3
+        title = "Explicit symbols"
+        # Decision block: explicit baskets should be context-agnostic and deterministic.
+        benchmark_symbol, benchmark_label = "^NSEI", "NIFTY 50"
+    else:
+        title, symbols = _moves_targets_for_context(current_symbol=current_symbol, active_watchlist=active_watchlist)
+        if title is None or symbols is None:
+            return 3
+        benchmark_symbol, benchmark_label = _relret_benchmark_for_context(
+            current_symbol=current_symbol,
+            active_watchlist=active_watchlist,
+        )
 
-    benchmark_symbol, benchmark_label = _relret_benchmark_for_context(
-        current_symbol=current_symbol,
-        active_watchlist=active_watchlist,
-    )
+    if benchmark_input is not None:
+        benchmark_symbol_resolved, benchmark_info = _resolve_symbol_with_fallback(benchmark_input)
+        if benchmark_info is None:
+            print(f"Could not resolve benchmark symbol '{benchmark_input}'.", file=sys.stderr)
+            return 3
+        benchmark_symbol = benchmark_symbol_resolved
+        benchmark_label = str(benchmark_info.get("shortName") or benchmark_info.get("longName") or benchmark_symbol_resolved)
+
     if benchmark_symbol is None:
         print("No benchmark available for relret in this context.", file=sys.stderr)
         return 3
@@ -2470,7 +2618,7 @@ def _print_relret_snapshot(
     for symbol, ret_txt, bench_txt, relret_txt, _relret, _idx in sorted(rows, key=_sort_key):
         print(" ".join([_pad_cell(symbol, 16), _pad_cell(ret_txt, 10, "right"), _pad_cell(bench_txt, 10, "right"), _pad_cell(relret_txt, 10, "right")]))
 
-    if active_watchlist:
+    if active_watchlist and explicit_symbols is None:
         # Keep portfolio summary fixed at the end so symbol ranking remains purely per-stock.
         print()
         if valid_returns:
@@ -2510,11 +2658,18 @@ def _print_corr_snapshot(
     current_symbol: str | None,
     active_watchlist: str | None,
     period_token: str,
+    explicit_symbols: list[str] | None = None,
 ) -> int:
-    """Print a compact correlation summary for symbols in active context."""
-    title, symbols = _moves_targets_for_context(current_symbol=current_symbol, active_watchlist=active_watchlist)
-    if title is None or symbols is None:
-        return 3
+    """Print a compact correlation summary for symbols in active context or explicit basket."""
+    if explicit_symbols is not None:
+        symbols = _resolve_analytics_symbol_inputs(explicit_symbols)
+        if symbols is None:
+            return 3
+        title = "Explicit symbols"
+    else:
+        title, symbols = _moves_targets_for_context(current_symbol=current_symbol, active_watchlist=active_watchlist)
+        if title is None or symbols is None:
+            return 3
     if len(symbols) < 2:
         print("corr needs at least two symbols in the current context.", file=sys.stderr)
         return 3
@@ -2624,15 +2779,34 @@ def _moves_targets_for_context(
     return current_symbol.upper(), [current_symbol]
 
 
+def _resolve_analytics_symbol_inputs(symbol_inputs: list[str]) -> list[str] | None:
+    """Resolve and deduplicate explicit analytics symbol inputs using regular symbol resolver."""
+    resolved_symbols: list[str] = []
+    for token in symbol_inputs:
+        resolved_symbol, info = _resolve_symbol_with_fallback(token)
+        if info is None:
+            print(f"Could not resolve symbol '{token}'.", file=sys.stderr)
+            return None
+        resolved_symbols.append(resolved_symbol)
+    return list(dict.fromkeys(resolved_symbols))
+
+
 def _print_moves_snapshot(
     current_symbol: str | None,
     active_watchlist: str | None,
     period_token: str,
+    explicit_symbols: list[str] | None = None,
 ) -> int:
-    """Print per-symbol directional move dots for watchlist or index constituent contexts."""
-    title, symbols = _moves_targets_for_context(current_symbol=current_symbol, active_watchlist=active_watchlist)
-    if title is None or symbols is None:
-        return 3
+    """Print per-symbol directional move dots for active context or explicit `on` basket."""
+    if explicit_symbols is not None:
+        symbols = _resolve_analytics_symbol_inputs(explicit_symbols)
+        if symbols is None:
+            return 3
+        title = "Explicit symbols"
+    else:
+        title, symbols = _moves_targets_for_context(current_symbol=current_symbol, active_watchlist=active_watchlist)
+        if title is None or symbols is None:
+            return 3
 
     days = _moves_days_for_period(period_token)
     period_label = period_token.upper()
@@ -2680,11 +2854,18 @@ def _trend_score_for_symbol(symbol: str) -> tuple[float | None, float | None]:
 def _print_trend_snapshot(
     current_symbol: str | None,
     active_watchlist: str | None,
+    explicit_symbols: list[str] | None = None,
 ) -> int:
     """Print per-symbol trend scores sorted from strongest to weakest."""
-    title, symbols = _moves_targets_for_context(current_symbol=current_symbol, active_watchlist=active_watchlist)
-    if title is None or symbols is None:
-        return 3
+    if explicit_symbols is not None:
+        symbols = _resolve_analytics_symbol_inputs(explicit_symbols)
+        if symbols is None:
+            return 3
+        title = "Explicit symbols"
+    else:
+        title, symbols = _moves_targets_for_context(current_symbol=current_symbol, active_watchlist=active_watchlist)
+        if title is None or symbols is None:
+            return 3
 
     print()
     print(f"Trend (Current) - {title}")
@@ -2783,8 +2964,7 @@ def _run_repl(
             print("  news <code>                 Show recent Yahoo headlines")
             print("  quit | exit                 Exit")
             print("  cls | clear                 Clear terminal")
-            print("  reload                      Refresh REPL shell state")
-            print("  r                           Refresh quote + replay last chart/table")
+            print("  reload | r                  Refresh quote + replay last chart/table")
             print("  cd ..                       Return to last index/watchlist mode")
             print("  !<shell-cmd>                Run shell command")
             print("  cache clear                 Clear today's persisted history cache")
@@ -2792,7 +2972,7 @@ def _run_repl(
             print("Analytics:")
             print("  move [period]               Directional move-dot board (alias: moves)")
             print("  trend                       Current trend-score board (alias: trends)")
-            print("  relret [period]             Relative-return ranking")
+            print("  relret [period]             Relative-return ranking (alias: rr)")
             print("  corr [period]               Correlation summary")
             print("  cmp <symbols...> [period [agg]]   Rebased compare table")
             print()
@@ -2839,8 +3019,7 @@ def _run_repl(
                 print("  quote | q")
                 print("  quit | exit")
                 print("  cls | clear")
-                print("  reload")
-                print("  r")
+                print("  reload | r")
                 print("  cd ..")
                 print("  !<shell-cmd>")
                 print("  cache clear")
@@ -2863,7 +3042,7 @@ def _run_repl(
                 print("  snap")
                 print("  move [period]")
                 print("  trend")
-                print("  relret [period]")
+                print("  relret [period] (alias: rr)")
                 print("  corr [period]")
                 print("\nExamples:")
                 print("  index")
@@ -2942,8 +3121,8 @@ def _run_repl(
             "clear": "clear",
             "cache clear": "cache clear",
             "reload": "reload",
-            "r": "refresh",
-            "refresh": "refresh",
+            "r": "reload",
+            "refresh": "reload",
             "!": "shell",
             "!<shell-cmd>": "shell",
             "code": "code",
@@ -2956,6 +3135,7 @@ def _run_repl(
             "trend": "trend",
             "trends": "trend",
             "relret": "relret",
+            "rr": "relret",
             "corr": "corr",
             "cmp": "cmp",
             "chart": "chart",
@@ -3052,19 +3232,10 @@ def _run_repl(
         if canonical == "reload":
             _print_command_help(
                 command="reload",
-                aliases=[],
+                aliases=["r", "refresh"],
                 usage_lines=["reload"],
-                detail_lines=["Refresh shell state only; does not re-fetch quote/chart/table."],
-                example_lines=["reload"],
-            )
-            return
-        if canonical == "refresh":
-            _print_command_help(
-                command="r",
-                aliases=["refresh"],
-                usage_lines=["r"],
                 detail_lines=["Refresh active quote and replay last non-quote chart/table/compare view."],
-                example_lines=["r"],
+                example_lines=["reload", "r"],
             )
             return
         if canonical == "shell":
@@ -3132,53 +3303,63 @@ def _run_repl(
             _print_command_help(
                 command="move",
                 aliases=["moves"],
-                usage_lines=["move [7d|1mo|3mo|6mo|9mo|1y]"],
+                usage_lines=[
+                    "move [7d|1mo|3mo|6mo|9mo|1y]",
+                    "move on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|1y]",
+                ],
                 detail_lines=[
                     "Shows directional dots per symbol for active context (symbol/index/watchlist).",
+                    "Use `on <codes...>` to override active context with explicit symbols.",
                     "Rows are sorted by max green days to least green days.",
                 ],
                 default_lines=["period: 1mo"],
-                example_lines=["move", "moves 3mo", "move 1y"],
+                example_lines=["move", "moves 3mo", "move on infy tcs reliance 3mo"],
             )
             return
         if canonical == "trend":
             _print_command_help(
                 command="trend",
                 aliases=["trends"],
-                usage_lines=["trend"],
+                usage_lines=["trend", "trend on <code1> <code2> ..."],
                 detail_lines=[
                     "Shows current trend score per symbol as score/total.",
-                    "No arguments accepted.",
+                    "Use `on <codes...>` to override active context with explicit symbols.",
                     "Rows are sorted highest trend score ratio first.",
                 ],
                 default_lines=["arguments: none"],
-                example_lines=["trend", "trends"],
+                example_lines=["trend", "trend on hdfcbank icicibank kotakbank"],
             )
             return
         if canonical == "relret":
             _print_command_help(
                 command="relret",
-                aliases=[],
-                usage_lines=["relret [7d|1mo|3mo|6mo|9mo|1y]"],
+                aliases=["rr"],
+                usage_lines=[
+                    "relret [7d|1mo|3mo|6mo|9mo|1y] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|1y]]",
+                    "relret on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|1y] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|1y]]",
+                ],
                 detail_lines=[
                     "Shows symbol return, benchmark return, and relative return.",
+                    "Use `on <codes...>` to override active context with explicit symbols.",
+                    "Use `vs <benchmark>` to override benchmark selection.",
                     "Rows are sorted by strongest outperformance first.",
                 ],
                 default_lines=["period: 1mo"],
-                example_lines=["relret", "relret 3mo"],
+                example_lines=["relret", "rr 3mo", "relret on tcs infy hcltech 6mo vs it"],
             )
             return
         if canonical == "corr":
             _print_command_help(
                 command="corr",
                 aliases=[],
-                usage_lines=["corr [1mo|3mo|6mo|9mo|1y]"],
+                usage_lines=["corr [1mo|3mo|6mo|9mo|1y]", "corr on <code1> <code2> ... [1mo|3mo|6mo|9mo|1y]"],
                 detail_lines=[
                     "Shows compact correlation summary for active context.",
+                    "Use `on <codes...>` to override active context with explicit symbols.",
                     "Sections: most positive pairs, most negative pairs, near-zero diversifier pairs.",
                 ],
                 default_lines=["period: 1mo"],
-                example_lines=["corr", "corr 6mo"],
+                example_lines=["corr", "corr 6mo", "corr on tcs infy reliance 3mo"],
             )
             return
         if canonical == "cmp":
@@ -3499,9 +3680,6 @@ def _run_repl(
             # Shell passthrough intentionally mirrors terminal behavior for quick ad-hoc tasks.
             subprocess.run(shell_cmd, shell=True, check=False)
             continue
-        if lower == "reload":
-            print("REPL refreshed.")
-            continue
         if lower == "wl":
             # Bare wl is a convenience alias for `wl list`.
             cmd = "wl list"
@@ -3583,7 +3761,7 @@ def _run_repl(
                 continue
             active_watchlist = target_name
             continue
-        if lower == "r":
+        if lower in {"reload", "r", "refresh"}:
             # Data refresh: always refresh quote, then replay last non-quote view.
             if current_symbol:
                 refreshed_info = _get_quote_payload(current_symbol)
@@ -3658,7 +3836,12 @@ def _run_repl(
         if lower == "move" or lower.startswith("move ") or lower == "moves" or lower.startswith("moves "):
             parts = cmd.split()
             args = parts[1:] if parts else []
-            period_token, parse_error = _parse_moves_period(args)
+            symbol_inputs, period_token, parse_error = _parse_scope_override_with_period(
+                args,
+                command_name="moves",
+                period_tokens=_MOVES_PERIODS,
+                default_period="1mo",
+            )
             if parse_error:
                 print(parse_error, file=sys.stderr)
                 continue
@@ -3667,31 +3850,44 @@ def _run_repl(
                 current_symbol=current_symbol,
                 active_watchlist=active_watchlist,
                 period_token=period_token,
+                explicit_symbols=symbol_inputs,
             )
             continue
         if lower == "trend" or lower.startswith("trend ") or lower == "trends" or lower.startswith("trends "):
-            if len(cmd.split()) != 1:
-                print("Usage: trend", file=sys.stderr)
+            parts = cmd.split()
+            args = parts[1:] if parts else []
+            symbol_inputs, parse_error = _parse_scope_override_no_period(args, command_name="trend")
+            if parse_error:
+                print(parse_error, file=sys.stderr)
                 continue
             _print_trend_snapshot(
                 current_symbol=current_symbol,
                 active_watchlist=active_watchlist,
+                explicit_symbols=symbol_inputs,
             )
             continue
-        if lower == "relret" or lower.startswith("relret "):
-            period_token, parse_error = _parse_moves_period(cmd.split()[1:])
+        if lower == "relret" or lower.startswith("relret ") or lower == "rr" or lower.startswith("rr "):
+            relret_parts = cmd.split()
+            symbol_inputs, period_token, benchmark_input, parse_error = _parse_relret_args(relret_parts[1:])
             if parse_error:
-                print("Usage: relret [7d|1mo|3mo|6mo|9mo|1y]", file=sys.stderr)
+                print(parse_error, file=sys.stderr)
                 continue
             assert period_token is not None
             _print_relret_snapshot(
                 current_symbol=current_symbol,
                 active_watchlist=active_watchlist,
                 period_token=period_token,
+                explicit_symbols=symbol_inputs,
+                benchmark_input=benchmark_input,
             )
             continue
         if lower == "corr" or lower.startswith("corr "):
-            period_token, parse_error = _parse_corr_period(cmd.split()[1:])
+            symbol_inputs, period_token, parse_error = _parse_scope_override_with_period(
+                cmd.split()[1:],
+                command_name="corr",
+                period_tokens=_CORR_PERIODS,
+                default_period="1mo",
+            )
             if parse_error:
                 print(parse_error, file=sys.stderr)
                 continue
@@ -3700,6 +3896,7 @@ def _run_repl(
                 current_symbol=current_symbol,
                 active_watchlist=active_watchlist,
                 period_token=period_token,
+                explicit_symbols=symbol_inputs,
             )
             continue
         if lower in {"list", "ll"} and active_watchlist:

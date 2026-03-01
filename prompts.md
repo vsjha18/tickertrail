@@ -26,8 +26,7 @@ Core commands:
 - `quit` / `exit`: leave REPL.
 - `cls`/`clear`: clear terminal screen (must not trigger symbol resolution).
 - `!<shell-cmd>`: pass command to underlying shell from REPL.
-- `reload`: refresh REPL shell state only.
-- `r`: refresh active quote and replay last chart/table view.
+- `reload` / `r`: refresh active quote and replay last chart/table view.
 - `cd ..`: return to the last exited index/watchlist mode without symbol re-resolution.
 - `index`: live market board with India + Global sections.
 - `index list`: curated index universe (symbol catalog) without live fetch.
@@ -54,9 +53,13 @@ Core commands:
 - `list` in watchlist mode: print symbols in current watchlist.
 - `snap` in watchlist mode: show snapshot for symbols in that watchlist.
 - `move [7d|1mo|3mo|6mo|9mo|1y]` in watchlist mode: show move-dot rows for all symbols (`moves` alias supported; default `1mo`).
-- `trend` in watchlist mode: show current trend-score rows for all symbols (`trends` alias supported; no arguments).
-- `relret [7d|1mo|3mo|6mo|9mo|1y]` in watchlist mode: show relative-return ranking (default `1mo`).
+- `move on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|1y]`: explicit symbol override for `move`/`moves`.
+- `trend` in watchlist mode: show current trend-score rows for all symbols (`trends` alias supported).
+- `trend on <code1> <code2> ...`: explicit symbol override for `trend`/`trends`.
+- `relret [7d|1mo|3mo|6mo|9mo|1y] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|1y]]` in watchlist mode: show relative-return ranking (alias `rr`; default `1mo`).
+- `relret on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|1y] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|1y]]`: explicit symbol override for `relret`.
 - `corr [1mo|3mo|6mo|9mo|1y]` in watchlist mode: show return-correlation summary (default `1mo`).
+- `corr on <code1> <code2> ... [1mo|3mo|6mo|9mo|1y]`: explicit symbol override for `corr`.
   - sort rows as gainers first (largest gain to smallest), then losers (smallest fall to largest), then unknowns.
   - include `Equal-Weight 1D` as average of available constituent daily percent changes.
   - include benchmark diagnostics:
@@ -424,6 +427,7 @@ snap behavior:
 moves behavior:
 - Works in watchlist mode and for active index symbols with configured constituents.
 - Canonical command is `move`; keep `moves` as an alias.
+- Supports explicit override grammar: `move on <code1> <code2> ... [period]` (alias: `moves on ...`).
 - Supported periods: `7d`, `1mo`, `3mo`, `6mo`, `9mo`, `1y` (default `1mo`).
 - Render one move-dot row per symbol and sort rows by green-day count descending (max green days first).
 - For index symbols without configured constituent universe, fall back to a single row for the index symbol itself.
@@ -431,20 +435,25 @@ moves behavior:
 trend behavior:
 - Works in watchlist mode and for active index symbols with configured constituents.
 - Canonical command is `trend`; keep `trends` as an alias.
+- Supports explicit override grammar: `trend on <code1> <code2> ...` (alias: `trends on ...`).
 - Render one trend-score row per symbol and sort rows by trend score descending.
 - For index symbols without configured constituent universe, fall back to a single row for the index symbol itself.
 - On index alias symbol switches, if Yahoo `Ticker` quote is sparse, build quote-like payload from grouped snapshot fetch so quote view still renders.
 
 relret behavior:
 - Works in watchlist mode and index/constituent contexts.
+- Supports explicit override grammar: `relret on <code1> <code2> ... [period] [vs <benchmark> [period]]`.
 - Supported periods: `7d`, `1mo`, `3mo`, `6mo`, `9mo`, `1y` (default `1mo`).
 - Show symbol return, benchmark return, and relative return; sort stock rows by strongest outperformance first.
 - In watchlist mode, append a final `WATCHLIST(EW)` row for equal-weight watchlist return vs benchmark, with one blank separator line before it.
 - In index mode, canonicalize fallback index symbols to primary index tickers before benchmark history fetch (for example `NIFTY_NEXT_50.NS` -> `^NIFTYNXT50`).
 - Benchmark policy is mode-specific: watchlist mode uses `^NSEI`; index mode uses the active index symbol itself.
+- For explicit `relret on ...`, override context scope and use fixed benchmark `^NSEI` (NIFTY 50).
+- `vs <benchmark>` overrides any default benchmark policy for the current command.
 
 corr behavior:
 - Works in watchlist mode and index/constituent contexts.
+- Supports explicit override grammar: `corr on <code1> <code2> ... [period]`.
 - Supported periods: `1mo`, `3mo`, `6mo`, `9mo`, `1y` (default `1mo`).
 - Build daily return series on overlapping timestamps; require at least two symbols.
 - Render compact sections only: top positive pairs, top negative pairs, and near-zero diversifier pairs.
@@ -458,14 +467,19 @@ Implement REPL controller with:
 - `cache clear` command that clears only today's persisted history cache bucket
 - `news <code>` command that resolves one symbol and prints recent Yahoo headlines
 - `moves [period]` command for watchlist/index contexts with default `1mo`
-- `trend` command for watchlist/index contexts (no arguments)
-- `relret [period]` command for watchlist/index contexts with default `1mo`
+- `moves on <code1> <code2> ... [period]` explicit symbol override for move-dot board
+- `trend` command for watchlist/index contexts
+- `trend on <code1> <code2> ...` explicit symbol override for trend-score board
+- `relret [period]` command for watchlist/index contexts with default `1mo` (alias `rr`)
+- `relret [period] [vs <benchmark> [period]]` command for watchlist/index contexts with default `1mo`
+- `relret on <code1> <code2> ... [period] [vs <benchmark> [period]]` explicit symbol override for relative-return board
 - `corr [period]` command for watchlist/index contexts with default `1mo`
+- `corr on <code1> <code2> ... [period]` explicit symbol override for correlation board
 - prompt updates on active symbol changes
 - clear stderr messages for invalid commands
 - refresh semantics:
-  - `reload` = shell refresh only
-  - `r` = refresh active quote + replay last non-quote view (`c`/`cc`/`t`/`tt`)
+  - `reload` (canonical) = refresh active quote + replay last non-quote view (`c`/`cc`/`t`/`tt`)
+  - `r` = alias of `reload`
 
 Important:
 - Keep `c` and `cc` separate by design.

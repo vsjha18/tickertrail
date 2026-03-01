@@ -20,7 +20,7 @@ uv run tickertrail
 - Compare stocks vs benchmark (`cmp`, `t`, `tt`)
 - Open index boards and constituent snapshots (`index`, `snap`)
 - Build and manage persistent watchlists
-- Run analytics boards (`move`, `trend`, `relret`, `corr`)
+- Run analytics boards (`move`, `trend`, `relret`/`rr`, `corr`)
 
 ## Daily Usage
 
@@ -54,8 +54,7 @@ corr 6mo
 
 - `h` / `help [topic|command]`: help system
 - `quote` / `q`: show active symbol/index quote
-- `reload`: refresh shell state
-- `r`: refresh quote and replay last chart/table
+- `reload` / `r`: refresh quote and replay last chart/table
 - `cd ..`: return to previous index/watchlist context
 - `cls` / `clear`: clear terminal
 - `quit` / `exit`: leave REPL
@@ -99,9 +98,15 @@ Inside watchlist mode (`<name>>`):
 - `list` / `ll`
 - `snap`
 - `move [period]`
+- `move on <code1> <code2> ... [period]`
 - `trend`
+- `trend on <code1> <code2> ...`
 - `relret [period]`
+- `rr [period]`
+- `relret [period] [vs <benchmark> [period]]`
+- `relret on <code1> <code2> ... [period] [vs <benchmark> [period]]`
 - `corr [period]`
+- `corr on <code1> <code2> ... [period]`
 
 ## Example Session
 

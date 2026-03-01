@@ -571,12 +571,126 @@ class BranchHelperTests(unittest.TestCase):
     def test_count_green_days_from_closes(self):
         self.assertEqual(cli._count_green_days_from_closes([1.0, 2.0, 1.0, 3.0], days=3), 2)
         self.assertIsNone(cli._count_green_days_from_closes([1.0, 2.0], days=3))
+        self.assertEqual(cli._parse_moves_period([]), ("1mo", None))
+        self.assertEqual(cli._parse_moves_period(["6mo"]), ("6mo", None))
+        self.assertIsNone(cli._parse_moves_period(["2y"])[0])
         self.assertEqual(cli._parse_moves_period(["1mo", "1y"])[0], None)
         self.assertAlmostEqual(cli._period_return_from_closes([100.0, 110.0]) or 0.0, 10.0, places=8)
         self.assertIsNone(cli._period_return_from_closes([100.0]))
+        self.assertIsNone(cli._period_return_from_closes([0.0, 10.0]))
         self.assertEqual(cli._parse_corr_period([]), ("1mo", None))
         self.assertEqual(cli._parse_corr_period(["3mo"]), ("3mo", None))
         self.assertEqual(cli._parse_corr_period(["7d"])[0], None)
+        self.assertEqual(cli._parse_corr_period(["1mo", "3mo"])[0], None)
+        self.assertEqual(cli._moves_days_for_period("custom"), 30)
+
+    @patch("tickertrail.cli._fetch_close_points_for_token", return_value=([dt.datetime(2026, 1, 1)], [100.0]))
+    def test_close_series_for_period_wrapper(self, mock_fetch):
+        points, closes = cli._close_series_for_period("A.NS", "1mo")
+        self.assertEqual(points, [dt.datetime(2026, 1, 1)])
+        self.assertEqual(closes, [100.0])
+        self.assertEqual(mock_fetch.call_args.kwargs["period_token"], "1mo")
+        self.assertEqual(mock_fetch.call_args.kwargs["interval"], "1d")
+
+    @patch("tickertrail.cli._close_series_for_period")
+    def test_daily_return_series_for_period_success(self, mock_close):
+        tz = dt.timezone.utc
+        points = [dt.datetime(2026, 1, 1, tzinfo=tz), dt.datetime(2026, 1, 2, tzinfo=tz), dt.datetime(2026, 1, 3, tzinfo=tz)]
+        mock_close.return_value = (points, [100.0, 110.0, 121.0])
+        series = cli._daily_return_series_for_period("A.NS", "1mo")
+        self.assertIsNotNone(series)
+        assert series is not None
+        self.assertEqual(len(series), 2)
+
+    def test_moves_targets_for_context_extra_paths(self):
+        with patch("tickertrail.cli._watchlist_symbols", return_value=[]), patch("sys.stderr", new_callable=io.StringIO):
+            self.assertEqual(cli._moves_targets_for_context(current_symbol=None, active_watchlist="swing"), (None, None))
+        with patch("sys.stderr", new_callable=io.StringIO):
+            self.assertEqual(cli._moves_targets_for_context(current_symbol=None, active_watchlist=None), (None, None))
+        with patch("tickertrail.cli._is_known_index_symbol", return_value=True), patch(
+            "tickertrail.cli._snap_universe_for_symbol", return_value=("IDX", ("A.NS", "B.NS", "A.NS"))
+        ):
+            self.assertEqual(
+                cli._moves_targets_for_context(current_symbol="^NSEI", active_watchlist=None),
+                ("IDX", ["A.NS", "B.NS"]),
+            )
+        with patch("tickertrail.cli._is_known_index_symbol", return_value=False):
+            self.assertEqual(
+                cli._moves_targets_for_context(current_symbol="infy.ns", active_watchlist=None),
+                ("INFY.NS", ["infy.ns"]),
+            )
+
+    def test_parse_scope_override_helpers(self):
+        self.assertEqual(
+            cli._parse_scope_override_with_period([], command_name="moves", period_tokens=cli._MOVES_PERIODS, default_period="1mo"),
+            (None, "1mo", None),
+        )
+        self.assertEqual(
+            cli._parse_scope_override_with_period(
+                ["3mo"],
+                command_name="moves",
+                period_tokens=cli._MOVES_PERIODS,
+                default_period="1mo",
+            ),
+            (None, "3mo", None),
+        )
+        scoped_symbols, scoped_period, scoped_err = cli._parse_scope_override_with_period(
+            ["on", "infy", "tcs", "6mo"],
+            command_name="moves",
+            period_tokens=cli._MOVES_PERIODS,
+            default_period="1mo",
+        )
+        self.assertEqual((scoped_symbols, scoped_period, scoped_err), (["infy", "tcs"], "6mo", None))
+        self.assertIn(
+            "Usage: moves",
+            cli._parse_scope_override_with_period(
+                ["on", "infy", "2y"],
+                command_name="moves",
+                period_tokens=cli._MOVES_PERIODS,
+                default_period="1mo",
+            )[2]
+            or "",
+        )
+        self.assertEqual(cli._parse_scope_override_no_period([], command_name="trend"), (None, None))
+        self.assertEqual(
+            cli._parse_scope_override_no_period(["on", "infy", "tcs"], command_name="trend"),
+            (["infy", "tcs"], None),
+        )
+        self.assertIn(
+            "Usage: trend",
+            cli._parse_scope_override_no_period(["infy"], command_name="trend")[1] or "",
+        )
+
+    def test_parse_relret_args_with_vs_and_on(self):
+        self.assertEqual(cli._parse_relret_args([]), (None, "1mo", None, None))
+        self.assertEqual(cli._parse_relret_args(["3mo"]), (None, "3mo", None, None))
+        self.assertEqual(cli._parse_relret_args(["3mo", "vs", "it"]), (None, "3mo", "it", None))
+        self.assertEqual(cli._parse_relret_args(["vs", "it", "6mo"]), (None, "6mo", "it", None))
+        self.assertEqual(
+            cli._parse_relret_args(["on", "infy", "tcs", "6mo", "vs", "it"]),
+            (["infy", "tcs"], "6mo", "it", None),
+        )
+        self.assertEqual(
+            cli._parse_relret_args(["on", "infy", "tcs", "vs", "it", "6mo"]),
+            (["infy", "tcs"], "6mo", "it", None),
+        )
+        self.assertEqual(cli._parse_relret_args(["vs", "it"]), (None, "1mo", "it", None))
+        self.assertIn("Usage: relret", cli._parse_relret_args(["on", "vs", "it"])[3] or "")
+        self.assertIn("Usage: relret", cli._parse_relret_args(["on", "infy", "vs"])[3] or "")
+        self.assertIn("Usage: relret", cli._parse_relret_args(["on", "infy", "6mo", "vs", "it", "3mo"])[3] or "")
+
+    @patch("tickertrail.cli._resolve_symbol_with_fallback")
+    def test_resolve_analytics_symbol_inputs_success_and_failure(self, mock_resolve):
+        mock_resolve.side_effect = [
+            ("INFY.NS", {"regularMarketPrice": 1.0}),
+            ("TCS.NS", {"regularMarketPrice": 1.0}),
+            ("INFY.NS", {"regularMarketPrice": 1.0}),
+            ("BAD", None),
+        ]
+        self.assertEqual(cli._resolve_analytics_symbol_inputs(["infy", "tcs", "infy"]), ["INFY.NS", "TCS.NS"])
+        with patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertIsNone(cli._resolve_analytics_symbol_inputs(["bad"]))
+            self.assertIn("Could not resolve symbol", err.getvalue())
 
     @patch("tickertrail.cli._colorize", side_effect=lambda txt, color: color[0].upper())
     @patch("tickertrail.cli._fetch_close_points_for_token")
@@ -624,6 +738,21 @@ class BranchHelperTests(unittest.TestCase):
             txt = out.getvalue()
         self.assertEqual(rc, 0)
         self.assertIn("^IXIC", txt)
+
+    @patch("tickertrail.cli._fetch_close_points_for_token", return_value=([], [1.0, 2.0, 3.0, 4.0]))
+    @patch("tickertrail.cli._resolve_analytics_symbol_inputs", return_value=["INFY.NS", "TCS.NS"])
+    def test_print_moves_snapshot_explicit_symbols_override_context(self, _mock_resolve, _mock_fetch):
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._print_moves_snapshot(current_symbol="^NSEI", active_watchlist="swing", period_token="1mo", explicit_symbols=["infy", "tcs"])
+        self.assertEqual(rc, 0)
+        self.assertIn("Explicit symbols", out.getvalue())
+
+    @patch("tickertrail.cli._resolve_analytics_symbol_inputs", return_value=None)
+    def test_print_moves_snapshot_explicit_symbols_resolution_failure(self, _mock_resolve):
+        self.assertEqual(
+            cli._print_moves_snapshot(current_symbol=None, active_watchlist=None, period_token="1mo", explicit_symbols=["bad"]),
+            3,
+        )
 
     @patch("tickertrail.cli._trend_score_for_symbol")
     def test_print_trend_snapshot_sorts_by_trend_score_desc(self, mock_trend_score):
@@ -739,6 +868,87 @@ class BranchHelperTests(unittest.TestCase):
         self.assertEqual(rc, 3)
         self.assertIn("no benchmark available", err.getvalue().lower())
 
+    @patch("tickertrail.cli._resolve_analytics_symbol_inputs", return_value=None)
+    def test_print_relret_snapshot_explicit_symbols_resolution_failure(self, _mock_resolve):
+        self.assertEqual(
+            cli._print_relret_snapshot(current_symbol=None, active_watchlist=None, period_token="1mo", explicit_symbols=["bad"]),
+            3,
+        )
+
+    @patch("tickertrail.cli._resolve_analytics_symbol_inputs", return_value=["A.NS", "B.NS"])
+    @patch("tickertrail.cli._close_series_for_period")
+    def test_print_relret_snapshot_explicit_symbols_uses_fixed_benchmark(self, mock_close, _mock_resolve):
+        tz = dt.timezone.utc
+        points = [dt.datetime(2026, 1, 1, tzinfo=tz), dt.datetime(2026, 2, 1, tzinfo=tz)]
+        mock_close.side_effect = [
+            (points, [100.0, 102.0]),  # ^NSEI benchmark
+            (points, [100.0, 105.0]),  # A
+            (points, [100.0, 101.0]),  # B
+        ]
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._print_relret_snapshot(current_symbol="^NSEI", active_watchlist="swing", period_token="1mo", explicit_symbols=["a", "b"])
+        self.assertEqual(rc, 0)
+        txt = out.getvalue()
+        self.assertIn("Explicit symbols", txt)
+        self.assertNotIn("WATCHLIST(EW)", txt)
+
+    @patch("tickertrail.cli._resolve_symbol_with_fallback", return_value=("^CNXIT", {"shortName": "NIFTY IT"}))
+    @patch("tickertrail.cli._resolve_analytics_symbol_inputs", return_value=["A.NS", "B.NS"])
+    @patch("tickertrail.cli._close_series_for_period")
+    def test_print_relret_snapshot_explicit_symbols_with_benchmark_override(
+        self,
+        mock_close,
+        _mock_resolve_symbols,
+        _mock_resolve_benchmark,
+    ):
+        tz = dt.timezone.utc
+        points = [dt.datetime(2026, 1, 1, tzinfo=tz), dt.datetime(2026, 2, 1, tzinfo=tz)]
+        mock_close.side_effect = [
+            (points, [100.0, 102.0]),  # benchmark from override
+            (points, [100.0, 105.0]),  # A
+            (points, [100.0, 101.0]),  # B
+        ]
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._print_relret_snapshot(
+                current_symbol=None,
+                active_watchlist=None,
+                period_token="1mo",
+                explicit_symbols=["a", "b"],
+                benchmark_input="it",
+            )
+        self.assertEqual(rc, 0)
+        self.assertIn("NIFTY IT (^CNXIT)", out.getvalue())
+
+    @patch("tickertrail.cli._resolve_symbol_with_fallback", return_value=("BAD", None))
+    @patch("tickertrail.cli._resolve_analytics_symbol_inputs", return_value=["A.NS", "B.NS"])
+    def test_print_relret_snapshot_benchmark_override_resolution_failure(self, _mock_resolve_symbols, _mock_resolve_benchmark):
+        with patch("sys.stderr", new_callable=io.StringIO) as err:
+            rc = cli._print_relret_snapshot(
+                current_symbol=None,
+                active_watchlist=None,
+                period_token="1mo",
+                explicit_symbols=["a", "b"],
+                benchmark_input="bad",
+            )
+        self.assertEqual(rc, 3)
+        self.assertIn("Could not resolve benchmark symbol", err.getvalue())
+
+    @patch("tickertrail.cli._moves_targets_for_context", return_value=("Watchlist swing", ["A.NS"]))
+    @patch("tickertrail.cli._relret_benchmark_for_context", return_value=("^NSEI", "NIFTY 50"))
+    @patch("tickertrail.cli._close_series_for_period")
+    def test_print_relret_snapshot_watchlist_no_valid_returns_summary_na(self, mock_close, _mock_bench, _mock_targets):
+        tz = dt.timezone.utc
+        points = [dt.datetime(2026, 1, 1, tzinfo=tz), dt.datetime(2026, 2, 1, tzinfo=tz)]
+        mock_close.side_effect = [
+            (points, [100.0, 101.0]),  # benchmark valid
+            (points[:1], [100.0]),  # stock invalid return
+        ]
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._print_relret_snapshot(current_symbol=None, active_watchlist="swing", period_token="1mo")
+        self.assertEqual(rc, 0)
+        self.assertIn("WATCHLIST(EW)", out.getvalue())
+        self.assertIn("n/a", out.getvalue().lower())
+
     @patch("tickertrail.cli._moves_targets_for_context", return_value=("X", ["A.NS"]))
     @patch("tickertrail.cli._relret_benchmark_for_context", return_value=("^NSEI", "NIFTY 50"))
     @patch("tickertrail.cli._close_series_for_period")
@@ -781,31 +991,85 @@ class BranchHelperTests(unittest.TestCase):
         self.assertEqual(rc, 3)
         self.assertIn("not enough overlapping return series", err.getvalue().lower())
 
+    @patch("tickertrail.cli._resolve_analytics_symbol_inputs", return_value=None)
+    def test_print_corr_snapshot_explicit_symbols_resolution_failure(self, _mock_resolve):
+        self.assertEqual(
+            cli._print_corr_snapshot(current_symbol=None, active_watchlist=None, period_token="1mo", explicit_symbols=["bad"]),
+            3,
+        )
+
+    @patch("tickertrail.cli._resolve_analytics_symbol_inputs", return_value=["A.NS"])
+    def test_print_corr_snapshot_explicit_symbols_needs_two(self, _mock_resolve):
+        with patch("sys.stderr", new_callable=io.StringIO) as err:
+            rc = cli._print_corr_snapshot(current_symbol=None, active_watchlist=None, period_token="1mo", explicit_symbols=["a"])
+        self.assertEqual(rc, 3)
+        self.assertIn("at least two symbols", err.getvalue().lower())
+
+    @patch("tickertrail.cli._moves_targets_for_context", return_value=("X", ["A.NS", "B.NS"]))
+    @patch("tickertrail.cli._daily_return_series_for_period")
+    def test_print_corr_snapshot_overlap_frame_too_small(self, mock_series, _mock_targets):
+        idx_a = pd.Index([1, 2], dtype="int64")
+        idx_b = pd.Index([2, 3], dtype="int64")
+        mock_series.side_effect = [pd.Series([0.01, 0.02], index=idx_a), pd.Series([0.03, 0.04], index=idx_b)]
+        with patch("sys.stderr", new_callable=io.StringIO) as err:
+            rc = cli._print_corr_snapshot(current_symbol=None, active_watchlist=None, period_token="1mo")
+        self.assertEqual(rc, 3)
+        self.assertIn("not enough overlapping return series", err.getvalue().lower())
+
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._print_corr_snapshot", return_value=0)
     @patch("tickertrail.cli._print_relret_snapshot", return_value=0)
     def test_run_repl_relret_and_corr_commands(self, mock_relret, mock_corr, _mock_hist):
-        with patch("builtins.input", side_effect=["relret", "relret 3mo", "corr", "corr 6mo", "exit"]):
+        with patch(
+            "builtins.input",
+            side_effect=[
+                "relret",
+                "rr",
+                "relret 3mo",
+                "relret on infy tcs 6mo",
+                "relret on infy tcs 6mo vs it",
+                "relret on infy tcs vs it 6mo",
+                "corr",
+                "corr 6mo",
+                "corr on infy tcs 3mo",
+                "exit",
+            ],
+        ):
             rc = cli._run_repl("BEL", "BEL.NS", {"regularMarketPrice": 1.0, "regularMarketPreviousClose": 1.0}, 80, 20)
         self.assertEqual(rc, 0)
-        self.assertEqual(mock_relret.call_count, 2)
+        self.assertEqual(mock_relret.call_count, 6)
         self.assertEqual(mock_relret.call_args_list[0].kwargs["period_token"], "1mo")
-        self.assertEqual(mock_relret.call_args_list[1].kwargs["period_token"], "3mo")
-        self.assertEqual(mock_corr.call_count, 2)
+        self.assertEqual(mock_relret.call_args_list[1].kwargs["period_token"], "1mo")
+        self.assertEqual(mock_relret.call_args_list[2].kwargs["period_token"], "3mo")
+        self.assertEqual(mock_relret.call_args_list[3].kwargs["period_token"], "6mo")
+        self.assertEqual(mock_relret.call_args_list[3].kwargs["explicit_symbols"], ["infy", "tcs"])
+        self.assertEqual(mock_relret.call_args_list[4].kwargs["period_token"], "6mo")
+        self.assertEqual(mock_relret.call_args_list[4].kwargs["benchmark_input"], "it")
+        self.assertEqual(mock_relret.call_args_list[5].kwargs["period_token"], "6mo")
+        self.assertEqual(mock_relret.call_args_list[5].kwargs["benchmark_input"], "it")
+        self.assertEqual(mock_corr.call_count, 3)
         self.assertEqual(mock_corr.call_args_list[0].kwargs["period_token"], "1mo")
         self.assertEqual(mock_corr.call_args_list[1].kwargs["period_token"], "6mo")
+        self.assertEqual(mock_corr.call_args_list[2].kwargs["period_token"], "3mo")
+        self.assertEqual(mock_corr.call_args_list[2].kwargs["explicit_symbols"], ["infy", "tcs"])
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._print_trend_snapshot", return_value=0)
     @patch("tickertrail.cli._print_moves_snapshot", return_value=0)
     def test_run_repl_move_and_trends_aliases(self, mock_moves, mock_trend, _mock_hist):
-        with patch("builtins.input", side_effect=["move", "moves 3mo", "trends", "exit"]):
+        with patch(
+            "builtins.input",
+            side_effect=["move", "moves 3mo", "moves on infy tcs 7d", "trends", "trend on infy tcs", "exit"],
+        ):
             rc = cli._run_repl("BEL", "BEL.NS", {"regularMarketPrice": 1.0, "regularMarketPreviousClose": 1.0}, 80, 20)
         self.assertEqual(rc, 0)
-        self.assertEqual(mock_moves.call_count, 2)
+        self.assertEqual(mock_moves.call_count, 3)
         self.assertEqual(mock_moves.call_args_list[0].kwargs["period_token"], "1mo")
         self.assertEqual(mock_moves.call_args_list[1].kwargs["period_token"], "3mo")
-        mock_trend.assert_called_once()
+        self.assertEqual(mock_moves.call_args_list[2].kwargs["period_token"], "7d")
+        self.assertEqual(mock_moves.call_args_list[2].kwargs["explicit_symbols"], ["infy", "tcs"])
+        self.assertEqual(mock_trend.call_count, 2)
+        self.assertEqual(mock_trend.call_args_list[1].kwargs["explicit_symbols"], ["infy", "tcs"])
 
     @patch("tickertrail.cli._fetch_close_points_for_token")
     def test_print_trend_snapshot_index_without_universe_falls_back_to_index_symbol(self, mock_fetch):

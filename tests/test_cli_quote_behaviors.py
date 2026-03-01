@@ -133,7 +133,7 @@ class ReplNoNetworkBehaviorTests(unittest.TestCase):
     @patch("tickertrail.cli._render_rebased_table", return_value=0)
     @patch("tickertrail.cli._has_quote_data", return_value=True)
     @patch("tickertrail.cli._get_quote_payload", return_value={"regularMarketPrice": 101.0, "regularMarketPreviousClose": 100.0})
-    def test_r_replays_last_table_view(
+    def test_reload_replays_last_table_view(
         self,
         _mock_get_quote,
         _mock_has_data,
@@ -142,7 +142,7 @@ class ReplNoNetworkBehaviorTests(unittest.TestCase):
         _mock_print_quote,
         _mock_history,
     ) -> None:
-        with patch("builtins.input", side_effect=["t", "r", "exit"]):
+        with patch("builtins.input", side_effect=["t", "reload", "exit"]):
             rc = _run_repl(
                 start_input_symbol="BEL",
                 start_resolved_symbol="BEL.NS",
