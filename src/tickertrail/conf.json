@@ -1,0 +1,6 @@
+{
+  "ticker_fallback_jitter_min": "10ms",
+  "ticker_fallback_jitter_max": "20ms",
+  "ticker_fallback_backoff_step": "50ms",
+  "ticker_fallback_backoff_max": "200ms"
+}

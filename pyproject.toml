@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tickertrail"
+version = "0.1.0"
+description = "Terminal stock price CLI with current quote and historical chart"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "yfinance>=0.2.54",
+  "plotext>=5.3.2"
+]
+
+[project.scripts]
+tickertrail = "tickertrail.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[dependency-groups]
+dev = [
+    "coverage>=7.13.4",
+]

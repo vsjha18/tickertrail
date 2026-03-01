@@ -1,0 +1,16 @@
+# Local app data
+data/db.json
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Tool/runtime caches
+.cache/
+.uv-cache/
+.tracecov/
+.coverage
+.tickertrail_history
+
+# Virtual environment
+.venv/
