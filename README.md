@@ -255,8 +255,8 @@ tickertrail> c 6mo
 202.4┼───────────────────────────────────────•••••───────────────▄▄▄▞▀▀▘───────┤
      └┬───────┬───────┬───────────────┬───────┬───────┬───────────────┬────────┘
    03-09-25 23-09-25 13-10-25     21-11-25  11-12-25 31-12-25     09-02-26
-Range: 144.00 - 212.71 | Last: 212.71
-52W Range: 120.00 - 260.00 | Last: 212.71
+Day Range  [────────────────────────────●─────────────────────]  144.00 .. 212.71
+52W Range  [───────────────●──────────────────────────────]  120.00 .. 260.00
 Move: +68.71 (+47.72%) | From: 03-09-25 -> 01-03-26
 ```
 
@@ -276,8 +276,9 @@ tickertrail> cc 5m
 1435.9┼────────────────••••────────────────────────────────────────────────────┤
       └┬───────────────────────────────────┬──────────────────────────────────┬┘
      05:55                               10:45                            15:30
+Day Range  [────────────────────────────●─────────────────────]  1,435.90 .. 1,448.30
+52W Range  [───────────────●──────────────────────────────]  120.00 .. 260.00
 Move: +7.21 (+0.50%) | From: 05:55 -> 10:00
-52W Range: 120.00 - 260.00 | Last: 212.71
 ```
 
 ### Swing Table (`t`)
@@ -416,6 +417,7 @@ t nifty 6mo w
 - Some data fields can be partially available depending on symbol/interval.
 - Intraday availability can vary by symbol and market session.
 - Intraday history cache is interval-aware with short TTL refresh windows (`1m` fastest, then `5m`, `15m+`) so `cc 1m` and `cc 5m` may differ when sampled at different times.
+- Quote `Day Range` and `52W Range` bars auto-scale to terminal width to keep each range on a single line when possible.
 - Optional direct-start mode (without entering REPL first) is supported, for example:
 
 ```bash

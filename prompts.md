@@ -593,6 +593,8 @@ Keep it concise and factual.
 - Footer must also include per-command history-cache stats (`hits` / `misses`) on the same line.
 - Persist history-cache JSON files under repository-local `.cache/history/` (never global user cache paths).
 - Keep intraday `close_points` cache freshness interval-aware with short TTLs (instead of stale-until-midnight), while preserving same-day caching for non-intraday history payloads.
+- Quote range bars (`Day Range`, `52W Range`) should compute width from terminal columns so range rows remain single-line on typical narrow terminals.
+- Chart footer range rows should also be single-line (`Day Range` and optional `52W Range` with bar + bounds) to reduce vertical clutter.
 
 ## 17) Definition of Done
 - Commands match frozen contract in section 0.

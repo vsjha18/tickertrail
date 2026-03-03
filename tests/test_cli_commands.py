@@ -511,6 +511,20 @@ class HelperCoverageTests(unittest.TestCase):
             txt = out.getvalue()
         self.assertIn("Alpha%", txt)
         self.assertIn("Final Alpha%", txt)
+        intraday_dates = [f"{9 + (i // 12):02d}:{(i % 12) * 5:02d}" for i in range(80)]
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            cli._print_rebased_table_output(
+                symbol="X",
+                benchmark_label="Y",
+                period_token="1d",
+                interval="5m",
+                dates=intraday_dates,
+                stock_values=[100.0 + i * 0.1 for i in range(80)],
+                bench_values=[100.0 + i * 0.08 for i in range(80)],
+            )
+            intraday_txt = out.getvalue()
+        self.assertIn("Sampled every", intraday_txt)
+        self.assertIn("base interval: 5m", intraday_txt)
 
     def test_build_multi_rebased_frame_and_compare_output(self):
         tz = dt.timezone.utc
@@ -570,10 +584,44 @@ class RenderCoverageTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertTrue(mock_plt.xticks.called)
 
+    @patch("tickertrail.cli.plt")
+    @patch("tickertrail.cli._benchmark_symbol_for", return_value=("^NSEI", "NIFTY 50"))
+    @patch("tickertrail.cli._fetch_close_points_for_token")
+    def test_draw_chart_does_not_print_rebased_table_block(self, mock_fetch, _mock_bench, _mock_plt):
+        t0 = dt.datetime(2026, 2, 16, 9, 30, tzinfo=dt.timezone.utc)
+        t1 = dt.datetime(2026, 2, 16, 9, 45, tzinfo=dt.timezone.utc)
+        t2 = dt.datetime(2026, 2, 16, 10, 0, tzinfo=dt.timezone.utc)
+        mock_fetch.side_effect = [
+            ([t0, t1, t2], [100.0, 101.0, 102.0]),  # stock
+            ([t0, t1], [200.0, 201.0]),  # benchmark ends earlier
+        ]
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._draw_chart("BEL.NS", "1d", "5m", 20, 100, info={"currency": "INR"})
+            txt = out.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn("Move:", txt)
+        self.assertIn("From: 15:00 -> 15:30", txt)
+        self.assertNotIn("Rebased Co-Plot (base=100)", txt)
+
     @patch("tickertrail.cli._fetch_close_points_for_token", return_value=([], []))
     def test_draw_chart_no_data(self, _mock_fetch):
         rc = cli._draw_chart("X", "1y", "1mo", 20, 100, info=None)
         self.assertEqual(rc, 3)
+
+    @patch("tickertrail.cli.plt")
+    @patch("tickertrail.cli._benchmark_symbol_for", return_value=(None, None))
+    @patch("tickertrail.cli._fetch_close_points_for_token")
+    def test_draw_chart_prints_52w_range_when_quote_fields_present(self, mock_fetch, _mock_bench, _mock_plt):
+        t0 = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+        t1 = dt.datetime(2026, 2, 1, tzinfo=dt.timezone.utc)
+        mock_fetch.return_value = ([t0, t1], [100.0, 120.0])
+        info = {"fiftyTwoWeekLow": 80.0, "fiftyTwoWeekHigh": 140.0}
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._draw_chart("BEL.NS", "1y", "1mo", 20, 100, info=info)
+            txt = out.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn("52W Range", txt)
+        self.assertNotIn("52W Line:", txt)
 
     @patch("tickertrail.cli._fetch_close_points_for_token")
     def test_render_rebased_table_success_and_error(self, mock_fetch):
