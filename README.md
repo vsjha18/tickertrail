@@ -255,17 +255,8 @@ tickertrail> c 6mo
 202.4┼───────────────────────────────────────•••••───────────────▄▄▄▞▀▀▘───────┤
      └┬───────┬───────┬───────────────┬───────┬───────┬───────────────┬────────┘
    03-09-25 23-09-25 13-10-25     21-11-25  11-12-25 31-12-25     09-02-26
-
-Rebased Co-Plot (base=100): ^CNXIT vs NIFTY 50 [6mo, 1d]
-Date Range: 03-09-25 -> 01-03-26
-Date           Stock     Bench     Delta    Alpha%
-03-09-25      100.00    100.00     +0.00    +0.00%
-09-10-25      109.03    113.64     -4.61    -4.06%
-14-11-25      119.62    129.05     -9.43    -7.31%
-...
-Final Relative (Stock - Bench): -23.30
-Final Alpha% (Stock vs Bench): -13.62%
 Range: 144.00 - 212.71 | Last: 212.71
+52W Range: 120.00 - 260.00 | Last: 212.71
 Move: +68.71 (+47.72%) | From: 03-09-25 -> 01-03-26
 ```
 
@@ -285,16 +276,8 @@ tickertrail> cc 5m
 1435.9┼────────────────••••────────────────────────────────────────────────────┤
       └┬───────────────────────────────────┬──────────────────────────────────┬┘
      05:55                               10:45                            15:30
-
-Rebased Co-Plot (base=100): ^CNXIT vs NIFTY 50 [1d, 5m]
-Date Range: 05:55 -> 10:00
-Date           Stock     Bench     Delta    Alpha%
-05:55         100.00    100.00     +0.00    +0.00%
-06:45         100.38    100.43     -0.05    -0.05%
-...
-Final Relative (Stock - Bench): -0.07
-Final Alpha% (Stock vs Bench): -0.07%
 Move: +7.21 (+0.50%) | From: 05:55 -> 10:00
+52W Range: 120.00 - 260.00 | Last: 212.71
 ```
 
 ### Swing Table (`t`)
@@ -368,9 +351,9 @@ Final           118.48      126.02      122.63
 ## Charts and Tables
 
 - Swing chart: `c [<symbol>] [<period>]`
-- Intraday chart: `cc [<symbol>] [<1m|5m|15m>]`
+- Intraday chart: `cc [<symbol>] [<1m|5m|15m|30m|1hr>]`
 - Swing table: `t [<symbol>] [<period>]`
-- Intraday table: `tt [<symbol>] [<1m|5m|15m>]`
+- Intraday table: `tt [<symbol>] [<1m|5m|15m|30m|1hr>]`
 - Multi-symbol compare: `cmp <symbol1> <symbol2> [symbolN ...] [period [agg]]`
 
 Token reminders:
@@ -432,6 +415,7 @@ t nifty 6mo w
 
 - Some data fields can be partially available depending on symbol/interval.
 - Intraday availability can vary by symbol and market session.
+- Intraday history cache is interval-aware with short TTL refresh windows (`1m` fastest, then `5m`, `15m+`) so `cc 1m` and `cc 5m` may differ when sampled at different times.
 - Optional direct-start mode (without entering REPL first) is supported, for example:
 
 ```bash

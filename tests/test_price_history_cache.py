@@ -143,6 +143,108 @@ class DailyHistoryCacheTests(unittest.TestCase):
                 price_history._CACHE_DAY = old_day
                 price_history._CACHE_STORE = old_store
 
+    def test_intraday_close_points_cache_expires_after_ttl(self) -> None:
+        """Intraday close-point cache should refresh after interval-specific TTL."""
+        calls: list[str] = []
+
+        def fake_download(*_args, **_kwargs):
+            calls.append("download")
+            return _sample_df()
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            old_dir = price_history._CACHE_DIR
+            old_day = price_history._CACHE_DAY
+            old_store = price_history._CACHE_STORE
+            old_metrics = dict(price_history._CACHE_METRICS)
+            try:
+                price_history._CACHE_DIR = Path(td)
+                price_history._CACHE_DAY = None
+                price_history._CACHE_STORE = None
+                price_history.reset_cache_metrics()
+                with (
+                    patch("tickertrail.price_history._cache_day", return_value="2026-02-22"),
+                    patch(
+                        "tickertrail.price_history._cache_now",
+                        side_effect=[
+                            dt.datetime(2026, 2, 22, 10, 0, 0),
+                            dt.datetime(2026, 2, 22, 10, 2, 5),
+                            dt.datetime(2026, 2, 22, 10, 2, 5),
+                            dt.datetime(2026, 2, 22, 10, 2, 5),
+                        ],
+                    ),
+                ):
+                    price_history.fetch_close_points_for_token(
+                        symbol="CSCO",
+                        period_token="1d",
+                        interval="5m",
+                        download_fn=fake_download,
+                        track_network_call=lambda _name: None,
+                    )
+                    price_history.fetch_close_points_for_token(
+                        symbol="CSCO",
+                        period_token="1d",
+                        interval="5m",
+                        download_fn=fake_download,
+                        track_network_call=lambda _name: None,
+                    )
+                self.assertEqual(len(calls), 2)
+            finally:
+                price_history._CACHE_DIR = old_dir
+                price_history._CACHE_DAY = old_day
+                price_history._CACHE_STORE = old_store
+                price_history._CACHE_METRICS = old_metrics
+
+    def test_close_points_daily_interval_stays_cached_same_day_without_ttl(self) -> None:
+        """Non-intraday close-point cache should remain valid for the same day."""
+        calls: list[str] = []
+
+        def fake_download(*_args, **_kwargs):
+            calls.append("download")
+            return _sample_df()
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            old_dir = price_history._CACHE_DIR
+            old_day = price_history._CACHE_DAY
+            old_store = price_history._CACHE_STORE
+            old_metrics = dict(price_history._CACHE_METRICS)
+            try:
+                price_history._CACHE_DIR = Path(td)
+                price_history._CACHE_DAY = None
+                price_history._CACHE_STORE = None
+                price_history.reset_cache_metrics()
+                with (
+                    patch("tickertrail.price_history._cache_day", return_value="2026-02-22"),
+                    patch(
+                        "tickertrail.price_history._cache_now",
+                        side_effect=[
+                            dt.datetime(2026, 2, 22, 10, 0, 0),
+                            dt.datetime(2026, 2, 22, 15, 0, 0),
+                            dt.datetime(2026, 2, 22, 15, 0, 0),
+                        ],
+                    ),
+                ):
+                    price_history.fetch_close_points_for_token(
+                        symbol="INFY.NS",
+                        period_token="1y",
+                        interval="1d",
+                        download_fn=fake_download,
+                        track_network_call=lambda _name: None,
+                    )
+                    price_history.fetch_close_points_for_token(
+                        symbol="INFY.NS",
+                        period_token="1y",
+                        interval="1d",
+                        download_fn=fake_download,
+                        track_network_call=lambda _name: None,
+                    )
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(price_history.cache_metrics_snapshot(), {"hits": 1, "misses": 1})
+            finally:
+                price_history._CACHE_DIR = old_dir
+                price_history._CACHE_DAY = old_day
+                price_history._CACHE_STORE = old_store
+                price_history._CACHE_METRICS = old_metrics
+
     def test_clear_history_cache_today_deletes_todays_file(self) -> None:
         """Manual clear should remove today's cache file and reset memory store."""
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

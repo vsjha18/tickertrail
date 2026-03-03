@@ -87,14 +87,14 @@ Non-negotiable grammar:
 - `t - <period> [agg]`
 - `t <code> - <period> [agg]`
 - same grammar for `c`
-- `cc`, `cc <1m|5m|15m>`, `cc <code>`, `cc <code> <1m|5m|15m>`
-- `tt`, `tt <1m|5m|15m>`, `tt <code>`, `tt <code> <1m|5m|15m>`
+- `cc`, `cc <1m|5m|15m|30m|1hr>`, `cc <code>`, `cc <code> <1m|5m|15m|30m|1hr>`
+- `tt`, `tt <1m|5m|15m|30m|1hr>`, `tt <code>`, `tt <code> <1m|5m|15m|30m|1hr>`
 - `tt - <period> [agg]`, `tt <code> - <period> [agg]`
 - canonical equivalents:
   - `chart swing`, `chart swing <code>`, `chart swing <code> <period>`, `chart swing - <period> [agg]`, `chart swing <code> - <period> [agg]`
-  - `chart intra`, `chart intra <1m|5m|15m>`, `chart intra <code>`, `chart intra <code> <1m|5m|15m>`
+  - `chart intra`, `chart intra <1m|5m|15m|30m|1hr>`, `chart intra <code>`, `chart intra <code> <1m|5m|15m|30m|1hr>`
   - `table swing`, `table swing <code>`, `table swing <code> <period>`, `table swing - <period> [agg]`, `table swing <code> - <period> [agg]`
-  - `table intra`, `table intra <1m|5m|15m>`, `table intra <code>`, `table intra <code> <1m|5m|15m>`
+  - `table intra`, `table intra <1m|5m|15m|30m|1hr>`, `table intra <code>`, `table intra <code> <1m|5m|15m|30m|1hr>`
   - `table intra - <period> [agg]`, `table intra <code> - <period> [agg]`
 - `cmp <symbol1> <symbol2> [symbolN ...] [period [agg]]`
 - `code <company-or-symbol-query>`
@@ -323,9 +323,9 @@ Axis behavior:
   - extend intraday to market close with NaN placeholders
 
 Output after chart:
-- rebased comparison table checkpoints
 - range stats
 - range line
+- optional 52W stats + 52W range line when quote fields are available
 - move summary
 ```
 
@@ -503,8 +503,11 @@ Minimum test matrix:
 - tt:
   - `tt`
   - `tt 15m`
+  - `tt 30m`
+  - `tt 1hr`
   - `tt nifty`
   - `tt nifty 5m`
+  - `tt nifty 1hr`
   - `tt - 2y mo`
   - `tt nifty - 3mo w`
 - c:
@@ -514,7 +517,10 @@ Minimum test matrix:
 - cc:
   - `cc`
   - `cc 1m`
+  - `cc 30m`
+  - `cc 1hr`
   - `cc nifty 5m`
+  - `cc nifty 1hr`
   - invalid token rejection
 - validator:
   - reject 1m with >7d
@@ -586,6 +592,7 @@ Keep it concise and factual.
 - For every command, print a final network footer line: total calls plus API breakdown (e.g. yfinance surfaces).
 - Footer must also include per-command history-cache stats (`hits` / `misses`) on the same line.
 - Persist history-cache JSON files under repository-local `.cache/history/` (never global user cache paths).
+- Keep intraday `close_points` cache freshness interval-aware with short TTLs (instead of stale-until-midnight), while preserving same-day caching for non-intraday history payloads.
 
 ## 17) Definition of Done
 - Commands match frozen contract in section 0.

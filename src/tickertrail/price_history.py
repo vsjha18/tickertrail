@@ -38,6 +38,11 @@ _CACHE_STORE: dict[str, dict[str, Any]] | None = None
 _CACHE_METRICS: dict[str, int] = {"hits": 0, "misses": 0}
 
 
+def _cache_now() -> dt.datetime:
+    """Return local wall-clock timestamp used for cache freshness checks."""
+    return dt.datetime.now()
+
+
 def reset_cache_metrics() -> None:
     """Reset per-command cache hit/miss counters."""
     _CACHE_METRICS["hits"] = 0
@@ -102,7 +107,9 @@ def _cache_set(kind: str, symbol: str, period_token: str, interval: str, payload
     """Set one cached history payload for today and persist it to disk."""
     _cache_refresh_day()
     assert _CACHE_STORE is not None
-    _CACHE_STORE[_cache_key(kind, symbol, period_token, interval)] = payload
+    record = dict(payload)
+    record["_cached_at"] = _cache_now().isoformat()
+    _CACHE_STORE[_cache_key(kind, symbol, period_token, interval)] = record
     try:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
         path = _cache_path_for_day(_CACHE_DAY or _cache_day())
@@ -168,6 +175,40 @@ def history_cache_summary_today() -> dict[str, Any]:
     }
 
 
+def _intraday_close_points_ttl_seconds(period_token: str, interval: str) -> int | None:
+    """Return TTL seconds for intraday close-point cache keys, else None."""
+    token = period_token.strip().lower()
+    interval_norm = interval.strip().lower()
+    if token != "1d":
+        return None
+    ttl_by_interval = {
+        "1m": 60,
+        "2m": 120,
+        "5m": 120,
+        "15m": 300,
+        "30m": 300,
+        "60m": 600,
+        "90m": 900,
+        "1h": 600,
+    }
+    return ttl_by_interval.get(interval_norm)
+
+
+def _cache_record_is_fresh(payload: dict[str, Any], ttl_seconds: int | None) -> bool:
+    """Return true when payload age is within TTL; no TTL means always fresh."""
+    if ttl_seconds is None:
+        return True
+    raw_cached_at = payload.get("_cached_at")
+    if not isinstance(raw_cached_at, str):
+        return False
+    try:
+        cached_at = dt.datetime.fromisoformat(raw_cached_at)
+    except ValueError:
+        return False
+    age_seconds = (_cache_now() - cached_at).total_seconds()
+    return age_seconds <= ttl_seconds
+
+
 def fetch_close_points_for_token(
     symbol: str,
     period_token: str,
@@ -181,7 +222,8 @@ def fetch_close_points_for_token(
         return [], []
 
     cached = _cache_get("close_points", symbol, token, interval)
-    if cached is not None:
+    ttl_seconds = _intraday_close_points_ttl_seconds(token, interval)
+    if cached is not None and _cache_record_is_fresh(cached, ttl_seconds):
         raw_points = cached.get("points")
         raw_prices = cached.get("prices")
         if isinstance(raw_points, list) and isinstance(raw_prices, list) and len(raw_points) == len(raw_prices):
