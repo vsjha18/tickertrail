@@ -42,8 +42,7 @@ class BranchHelperTests(unittest.TestCase):
     @patch("tickertrail.cli._batch_index_snapshots")
     def test_index_quote_fallback_payload_uses_candidates_and_builds_quote_like_payload(self, mock_batch):
         mock_batch.return_value = {
-            "^CNXMIDCAP": {"regularMarketPrice": None, "regularMarketPreviousClose": None},
-            "^NSEMDCP100": {
+            "NIFTY_MIDCAP_100.NS": {
                 "regularMarketPrice": 123.4,
                 "regularMarketPreviousClose": 120.0,
                 "regularMarketDayLow": 119.0,
@@ -56,9 +55,29 @@ class BranchHelperTests(unittest.TestCase):
         self.assertEqual(payload["shortName"], "NIFTY MIDCAP 100")
         self.assertEqual(payload["regularMarketPrice"], 123.4)
         self.assertEqual(payload["regularMarketPreviousClose"], 120.0)
+        mock_batch.assert_called_once_with(["NIFTY_MIDCAP_100.NS", "^CNXMIDCAP"])
+
+    @patch("tickertrail.cli._batch_index_snapshots")
+    def test_index_quote_fallback_payload_defence_uses_only_canonical_symbol(self, mock_batch):
+        mock_batch.return_value = {
+            "NIFTY_IND_DEFENCE.NS": {"regularMarketPrice": 8293.95, "regularMarketPreviousClose": 8088.05},
+            "^CNXDEFENCE": {"regularMarketPrice": None, "regularMarketPreviousClose": None},
+        }
+        payload = cli._index_quote_fallback_payload("^CNXDEFENCE")
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertEqual(payload["regularMarketPrice"], 8293.95)
+        mock_batch.assert_called_once_with(["NIFTY_IND_DEFENCE.NS", "^CNXDEFENCE"])
 
     def test_index_quote_fallback_payload_rejects_empty_symbol(self):
         self.assertIsNone(cli._index_quote_fallback_payload("   "))
+
+    def test_index_probe_candidates_prefers_stable_symbols(self):
+        self.assertEqual(cli._index_probe_candidates("^CNXMIDCAP"), ["NIFTY_MIDCAP_100.NS", "^CNXMIDCAP"])
+        self.assertEqual(cli._index_probe_candidates("^NIFTYNXT50"), ["NIFTY_NEXT_50.NS", "^NIFTYNXT50"])
+        self.assertEqual(cli._index_probe_candidates("^NSESMCP100"), ["NIFTY_SMLCAP_100.NS", "^NSESMCP100"])
+        self.assertEqual(cli._index_probe_candidates("^CNXDEFENCE"), ["NIFTY_IND_DEFENCE.NS", "^CNXDEFENCE"])
+        self.assertEqual(cli._index_probe_candidates("^NSEI"), ["^NSEI"])
 
     def test_progress_scope_and_network_blip(self):
         with (
@@ -248,6 +267,8 @@ class BranchHelperTests(unittest.TestCase):
         self.assertEqual(cli._candidate_symbols("cpse"), ["^CNXPSE"])
         self.assertEqual(cli._candidate_symbols("niftyfmcg"), ["^CNXFMCG"])
         self.assertEqual(cli._candidate_symbols("niftydefence"), ["^CNXDEFENCE"])
+        self.assertEqual(cli._candidate_symbols("defence"), ["^CNXDEFENCE"])
+        self.assertEqual(cli._candidate_symbols("defense"), ["^CNXDEFENCE"])
         self.assertEqual(cli._candidate_symbols("niftypse"), ["^CNXPSE"])
         self.assertEqual(cli._candidate_symbols("niftyauto"), ["^CNXAUTO"])
         self.assertEqual(cli._candidate_symbols("s&p"), ["^GSPC"])
@@ -271,6 +292,21 @@ class BranchHelperTests(unittest.TestCase):
         sym, info = cli._resolve_symbol("   ")
         self.assertEqual(sym, "   ")
         self.assertIsNone(info)
+
+    @patch("tickertrail.cli._choose_symbol_from_options")
+    @patch("tickertrail.cli._search_symbol_options")
+    @patch("tickertrail.cli._resolve_symbol", return_value=("^CNXDEFENCE", None))
+    def test_resolve_symbol_with_fallback_skips_fuzzy_for_index_alias(
+        self,
+        _mock_resolve,
+        mock_search,
+        mock_choose,
+    ):
+        sym, info = cli._resolve_symbol_with_fallback("defence")
+        self.assertEqual(sym, "^CNXDEFENCE")
+        self.assertIsNone(info)
+        mock_search.assert_not_called()
+        mock_choose.assert_not_called()
 
     @patch("sys.stdin.isatty", return_value=True)
     def test_choose_symbol_cancel(self, _mock_tty):
@@ -2348,7 +2384,7 @@ class BranchRenderAndReplTests(unittest.TestCase):
         ):
             rc = cli._run_repl("BEL", "BEL.NS", {"regularMarketPrice": 1.0, "regularMarketPreviousClose": 1.0}, 80, 20)
         self.assertEqual(rc, 0)
-        self.assertIn("Could not fetch quote for '^CNXIT'.", err.getvalue())
+        self.assertIn("Switched to index '^CNXIT' (quote unavailable right now).", err.getvalue())
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._resolve_benchmark_override", return_value=(None, None))

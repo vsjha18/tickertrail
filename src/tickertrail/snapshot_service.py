@@ -183,6 +183,8 @@ def batch_index_snapshots(
             "regularMarketPreviousClose": None,
             "regularMarketDayLow": None,
             "regularMarketDayHigh": None,
+            "regularMarketChange": None,
+            "regularMarketChangePercent": None,
         }
         for sym in symbols
     }
@@ -210,6 +212,8 @@ def batch_index_snapshots(
                 "regularMarketPreviousClose": prev,
                 "regularMarketDayLow": day_low,
                 "regularMarketDayHigh": day_high,
+                "regularMarketChange": None,
+                "regularMarketChangePercent": None,
             }
     except Exception:
         return snapshots
@@ -288,6 +292,8 @@ def resolve_group_candidate_snapshots(
                         "regularMarketPreviousClose": coerce_float(info.get("regularMarketPreviousClose")),
                         "regularMarketDayLow": coerce_float(info.get("regularMarketDayLow")),
                         "regularMarketDayHigh": coerce_float(info.get("regularMarketDayHigh")),
+                        "regularMarketChange": coerce_float(info.get("regularMarketChange")),
+                        "regularMarketChangePercent": coerce_float(info.get("regularMarketChangePercent")),
                     }
                     chosen[key] = (candidate, snapshots[candidate])
                     misses = 0
@@ -340,6 +346,8 @@ def fetch_group_snapshots_with_retries(
                     "regularMarketPreviousClose": info.get("regularMarketPreviousClose"),
                     "regularMarketDayLow": info.get("regularMarketDayLow"),
                     "regularMarketDayHigh": info.get("regularMarketDayHigh"),
+                    "regularMarketChange": info.get("regularMarketChange"),
+                    "regularMarketChangePercent": info.get("regularMarketChangePercent"),
                 }
                 if snapshots[sym].get("regularMarketPrice") is None:
                     consecutive_fallback_misses += 1

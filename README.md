@@ -88,7 +88,17 @@ Many commands are context-sensitive. You usually do not need arguments.
 
 ### 2) Index mode (`tickertrail>index>`)
 
-- Entered by typing an index alias/symbol (example: `nifty`, `it`, `^cnxit`).
+- Entered by typing an index alias/symbol (example: `nifty`, `it`, `defence`, `^cnxit`).
+- Index aliases are resolved directly into index context (they do not trigger equity fuzzy picker fallback when quote payload is temporarily sparse).
+- If quote data is unavailable at switch time, the app still enters index mode and prints a warning.
+- Yahoo index probing keeps a minimal fallback set to reduce dead calls:
+  - `^CNXMIDCAP` -> `NIFTY_MIDCAP_100.NS`
+  - `^NIFTYNXT50` -> `NIFTY_NEXT_50.NS`
+  - `^NSESMCP100` -> `NIFTY_SMLCAP_100.NS`
+  - `^CNXDEFENCE` -> `NIFTY_IND_DEFENCE.NS`
+- `index` board resolves prices first and applies intraday range fallback at render time for missing ranges (to avoid extra quote-probe chatter).
+- When day range is unavailable but `price`/`prevClose` exist, `index` board uses a `prev->last` proxy bar so range does not degrade to `n/a`.
+- When `prevClose` is missing but Yahoo provides direct change fields, `index` board uses `regularMarketChange`/`regularMarketChangePercent` instead of showing `Change n/a`.
 - `snap` shows constituents for supported indices.
 - `move`, `trend`, `relret`, `corr` can be run with no arguments:
   - `move` runs over index constituents (or index fallback when constituents are unavailable).

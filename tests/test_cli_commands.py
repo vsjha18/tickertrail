@@ -668,6 +668,7 @@ class RenderCoverageTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertIn("India", out.getvalue())
             self.assertIn("NIFTY INFRA", out.getvalue())
+            self.assertIn("NIFTY DEFENCE", out.getvalue())
             self.assertIn("NIFTY NEXT 50", out.getvalue())
             self.assertIn("NIFTY MIDCAP SELECT", out.getvalue())
         with patch("sys.stdout", new_callable=io.StringIO) as out:
@@ -675,6 +676,7 @@ class RenderCoverageTests(unittest.TestCase):
             self.assertEqual(rc2, 0)
             self.assertIn("Index Catalog", out.getvalue())
             self.assertIn("NIFTY INFRA", out.getvalue())
+            self.assertIn("NIFTY DEFENCE", out.getvalue())
             self.assertIn("NIFTY SMALLCAP 100", out.getvalue())
             self.assertIn("NIFTY MIDCAP SELECT", out.getvalue())
 
@@ -699,6 +701,78 @@ class RenderCoverageTests(unittest.TestCase):
         self.assertIn("[cyan]NIFTY 50[/cyan]", out.getvalue())
         self.assertIn("[cyan]^NSEI[/cyan]", out.getvalue())
         self.assertIn("[cyan]99.00[/cyan]", out.getvalue())
+
+    @patch("tickertrail.cli._fetch_day_range_fallback", return_value=(None, None))
+    @patch("tickertrail.cli._get_quote_payload", return_value={})
+    @patch("tickertrail.cli._has_quote_data", return_value=False)
+    @patch("tickertrail.cli._batch_index_snapshots")
+    def test_index_board_uses_prev_to_last_proxy_when_day_range_missing(self, mock_batch, _mock_has, _mock_quote, _mock_rng):
+        mock_batch.return_value = {
+            "NIFTY_NEXT_50.NS": {
+                "regularMarketPrice": 31893.2,
+                "regularMarketPreviousClose": 31724.75,
+                "regularMarketDayLow": None,
+                "regularMarketDayHigh": None,
+            }
+        }
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._print_index_board()
+            txt = out.getvalue()
+        self.assertEqual(rc, 0)
+        line = next((ln for ln in txt.splitlines() if "NIFTY NEXT 50" in ln), "")
+        self.assertIn("[", line)
+        self.assertNotIn("n/a", line.lower())
+
+    @patch("tickertrail.cli._fetch_day_range_fallback", return_value=(None, None))
+    @patch("tickertrail.cli._get_quote_payload", return_value={})
+    @patch("tickertrail.cli._has_quote_data", return_value=False)
+    @patch("tickertrail.cli._batch_index_snapshots")
+    def test_index_board_uses_direct_change_when_prev_close_missing(self, mock_batch, _mock_has, _mock_quote, _mock_rng):
+        mock_batch.return_value = {
+            "NIFTY_IND_DEFENCE.NS": {
+                "regularMarketPrice": 8293.95,
+                "regularMarketPreviousClose": None,
+                "regularMarketDayLow": 8147.1,
+                "regularMarketDayHigh": 8352.25,
+                "regularMarketChange": 205.9,
+                "regularMarketChangePercent": 2.55,
+            }
+        }
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._print_index_board()
+            txt = out.getvalue()
+        self.assertEqual(rc, 0)
+        line = next((ln for ln in txt.splitlines() if "NIFTY DEFENCE" in ln), "")
+        self.assertIn("+205.90 (+2.55%)", line)
+
+    @patch("tickertrail.cli._fetch_day_range_fallback", return_value=(None, None))
+    @patch("tickertrail.cli._has_quote_data", return_value=False)
+    @patch("tickertrail.cli._batch_index_snapshots")
+    @patch("tickertrail.cli._get_quote_payload")
+    def test_index_board_fetches_quote_change_when_batch_missing_prev_and_change(
+        self,
+        mock_quote,
+        mock_batch,
+        _mock_has,
+        _mock_rng,
+    ):
+        mock_batch.return_value = {
+            "NIFTY_IND_DEFENCE.NS": {
+                "regularMarketPrice": 8293.95,
+                "regularMarketPreviousClose": None,
+                "regularMarketDayLow": 8147.1,
+                "regularMarketDayHigh": 8352.25,
+                "regularMarketChange": None,
+                "regularMarketChangePercent": None,
+            }
+        }
+        mock_quote.return_value = {"regularMarketChange": 205.9, "regularMarketChangePercent": 2.55}
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._print_index_board()
+            txt = out.getvalue()
+        self.assertEqual(rc, 0)
+        line = next((ln for ln in txt.splitlines() if "NIFTY DEFENCE" in ln), "")
+        self.assertIn("+205.90 (+2.55%)", line)
 
     @patch("tickertrail.cli._fetch_day_range_fallback", return_value=(None, None))
     @patch("tickertrail.cli._get_quote_payload", return_value={})

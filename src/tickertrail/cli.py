@@ -38,20 +38,25 @@ _WATCHLIST_DB_JSON = Path(__file__).resolve().parents[2] / "data" / "db.json"
 _HISTORY_FILE = Path(__file__).resolve().parents[2] / ".tickertrail_history"
 _CLI_CONF_JSON = Path(__file__).resolve().with_name("conf.json")
 _INDEX_SYMBOL_FALLBACKS: dict[str, tuple[str, ...]] = {
-    # Yahoo index naming is inconsistent; keep fallback candidates for robustness.
-    "^CNXMIDCAP": ("^NSEMDCP100", "NIFTY_MIDCAP_100.NS", "NIFTYMIDCAP100.NS"),
-    "^NSEMDCP50": ("NIFTY_MID_SELECT.NS", "NIFTY_MIDCAP_SELECT.NS"),
-    "^NIFTYNXT50": ("NIFTY_NEXT_50.NS", "NIFTYNXT50.NS"),
-    "^NSESMCP100": ("^NSESMCP250", "NIFTY_SMALLCAP_100.NS", "NIFTY_SMLCAP_100.NS"),
-    "^CNXPSE": ("NIFTY_PSE.NS", "^NIFTYPSE"),
-    "^CNXPSUBANK": ("NIFTY_PSU_BANK.NS", "^NIFTYPSUBANK"),
-    "^CNXDEFENCE": ("NIFTYINDDEFENCE.NS", "^NIFTYDEFENCE", "NIFTY_DEFENCE.NS"),
-    "^CNXINFRA": ("NIFTY_INFRA.NS",),
-    "^CNXENERGY": ("NIFTY_ENERGY.NS",),
-    "^CNXMEDIA": ("NIFTY_MEDIA.NS",),
-    "^CNXMETAL": ("NIFTY_METAL.NS",),
-    "^CNXMNC": ("NIFTY_MNC.NS",),
-    "^CNXREALTY": ("NIFTY_REALTY.NS",),
+    # Keep only empirically useful Yahoo alternates to minimize dead probes.
+    "^CNXMIDCAP": ("NIFTY_MIDCAP_100.NS",),
+    "^NIFTYNXT50": ("NIFTY_NEXT_50.NS",),
+    "^NSESMCP100": ("NIFTY_SMLCAP_100.NS",),
+    "^CNXDEFENCE": ("NIFTY_IND_DEFENCE.NS",),
+}
+_INDEX_PREFERRED_QUOTE_SYMBOLS: dict[str, str] = {
+    "^CNXMIDCAP": "NIFTY_MIDCAP_100.NS",
+    "^NIFTYNXT50": "NIFTY_NEXT_50.NS",
+    "^NSESMCP100": "NIFTY_SMLCAP_100.NS",
+    "^CNXDEFENCE": "NIFTY_IND_DEFENCE.NS",
+}
+_INDEX_NORMALIZATION_ALIASES: dict[str, str] = {
+    # Compatibility aliases retained for normalization only (not active probe targets).
+    "^NSEMDCP100": "^CNXMIDCAP",
+    "NIFTYMIDCAP100.NS": "^CNXMIDCAP",
+    "^NSESMCP250": "^NSESMCP100",
+    "NIFTY_SMALLCAP_100.NS": "^NSESMCP100",
+    "NIFTY_IND_DEFENCE.NS": "^CNXDEFENCE",
 }
 _INDIA_INDEX_BOARD = (
     ("^NSEI", "NIFTY 50"),
@@ -64,6 +69,7 @@ _INDIA_INDEX_BOARD = (
     ("^CNXPSE", "NIFTY PSE"),
     ("^CNXAUTO", "NIFTY AUTO"),
     ("^CNXENERGY", "NIFTY ENERGY"),
+    ("^CNXDEFENCE", "NIFTY DEFENCE"),
     ("^CNXFMCG", "NIFTY FMCG"),
     ("^CNXMEDIA", "NIFTY MEDIA"),
     ("^CNXMETAL", "NIFTY METAL"),
@@ -166,6 +172,10 @@ _INDEX_ALIASES = {
     "NIFTY NEXT 50": "^NIFTYNXT50",
     "NIFTYDEFENCE": "^CNXDEFENCE",
     "NIFTY DEFENCE": "^CNXDEFENCE",
+    "NIFTYDEFENSE": "^CNXDEFENCE",
+    "NIFTY DEFENSE": "^CNXDEFENCE",
+    "DEFENCE": "^CNXDEFENCE",
+    "DEFENSE": "^CNXDEFENCE",
     "PSUBANK": "^CNXPSUBANK",
     "NIFTYPSUBANK": "^CNXPSUBANK",
     "NIFTY PSU BANK": "^CNXPSUBANK",
@@ -841,6 +851,27 @@ def _candidate_symbols(symbol: str) -> list[str]:
     return [f"{base}.NS", f"{base}.BO", base]
 
 
+def _index_probe_candidates(symbol: str) -> list[str]:
+    """Return ordered Yahoo probe symbols for one index, preferring empirically stable codes."""
+    upper = symbol.strip().upper()
+    if not upper:
+        return []
+    ordered = [
+        _INDEX_PREFERRED_QUOTE_SYMBOLS.get(upper, upper),
+        upper,
+        *_INDEX_SYMBOL_FALLBACKS.get(upper, ()),
+    ]
+    seen: set[str] = set()
+    out: list[str] = []
+    for candidate in ordered:
+        item = candidate.strip().upper()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
 def _has_quote_data(info: dict[str, Any]) -> bool:
     """Return True when payload appears to contain usable quote fields."""
     if not info:
@@ -864,8 +895,8 @@ def _resolve_symbol(symbol: str) -> tuple[str, dict[str, Any] | None]:
         return symbol, None
 
     for candidate in candidates:
-        # Index aliases often have multiple Yahoo symbol variants; probe fallbacks automatically.
-        to_try = [candidate, *_INDEX_SYMBOL_FALLBACKS.get(candidate, ())]
+        # Decision block: index quote probes prefer symbols with the strongest observed Yahoo coverage.
+        to_try = _index_probe_candidates(candidate) if _is_known_index_symbol(candidate) else [candidate]
         for probe in to_try:
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 info = _get_quote_payload(probe)
@@ -984,6 +1015,10 @@ def _choose_symbol_from_options(query: str, options: list[dict[str, str]]) -> st
 def _resolve_symbol_with_fallback(symbol: str) -> tuple[str, dict[str, Any] | None]:
     """Resolve symbols using Yahoo first, then local NSE fuzzy fallback."""
     resolved_symbol, info = _resolve_symbol(symbol)
+    # Validation guardrail: keep index aliases in index space even when quote payload is sparse.
+    # This prevents fuzzy equity suggestions for inputs like `defence` mapped to index symbols.
+    if _index_alias_target(symbol) is not None:
+        return resolved_symbol, info
     if info is not None:
         return resolved_symbol, info
 
@@ -1200,6 +1235,8 @@ def _is_known_index_symbol(symbol: str) -> bool:
     upper = symbol.strip().upper()
     if not upper:
         return False
+    if upper in _INDEX_NORMALIZATION_ALIASES:
+        return True
     if upper in _INDEX_BOARD_SYMBOLS or upper in _INDEX_SYMBOL_FALLBACKS:
         return True
     return any(upper == fallback.upper() for fallbacks in _INDEX_SYMBOL_FALLBACKS.values() for fallback in fallbacks)
@@ -1298,10 +1335,15 @@ def _print_index_board() -> int:
         """Resolve board rows via the shared grouped snapshot strategy."""
         primary_symbols = [symbol for symbol, _ in rows]
         candidate_map: dict[str, list[str]] = {
-            symbol: [symbol, *_INDEX_SYMBOL_FALLBACKS.get(symbol, ())]
+            symbol: _index_probe_candidates(symbol)
             for symbol in primary_symbols
         }
-        chosen_snapshots, _passes_used = _resolve_group_candidate_snapshots(candidate_map)
+        # For index board, avoid quote-based day-range enrichment during candidate resolution.
+        # Missing ranges are handled later via intraday fallback on displayed rows.
+        chosen_snapshots, _passes_used = _resolve_group_candidate_snapshots(
+            candidate_map,
+            enrich_day_range_from_symbol_candidates_fn=lambda _symbols, _snapshot: None,
+        )
         return chosen_snapshots
 
     all_rows = tuple([*_INDIA_INDEX_BOARD, *_GLOBAL_INDEX_BOARD])
@@ -1324,9 +1366,37 @@ def _print_index_board() -> int:
                 prev = snap.get("regularMarketPreviousClose")
                 day_low = snap.get("regularMarketDayLow")
                 day_high = snap.get("regularMarketDayHigh")
+                change_raw = snap.get("regularMarketChange")
+                pct_raw = snap.get("regularMarketChangePercent")
+            else:
+                change_raw = None
+                pct_raw = None
 
             change = None if price is None or prev is None else float(price) - float(prev)
             pct = None if change is None or not prev else (change / float(prev)) * 100
+            # Some index symbols expose direct change/pct without previous-close anchors.
+            if (change is None or pct is None) and change_raw is not None and pct_raw is not None:
+                try:
+                    change = float(change_raw)
+                    pct = float(pct_raw)
+                except (TypeError, ValueError):
+                    pass
+            if change is None or pct is None:
+                # Guardrail: when batch daily snapshots provide only one close row,
+                # fetch direct quote fields for change/pct before rendering n/a.
+                quote_info = _get_quote_payload(chosen_symbol)
+                try:
+                    q_change = quote_info.get("regularMarketChange")
+                    q_pct = quote_info.get("regularMarketChangePercent")
+                    if q_change is not None and q_pct is not None:
+                        change = float(q_change)
+                        pct = float(q_pct)
+                    elif price is not None and quote_info.get("regularMarketPreviousClose") is not None:
+                        prev_q = float(quote_info.get("regularMarketPreviousClose"))
+                        change = float(price) - prev_q
+                        pct = (change / prev_q) * 100 if prev_q else None
+                except (TypeError, ValueError):
+                    pass
             price_txt = _fmt_price(price)
             if change is None or pct is None:
                 change_txt = "n/a"
@@ -1342,6 +1412,17 @@ def _print_index_board() -> int:
             if price_f is not None and (low_f is None or high_f is None or high_f <= low_f):
                 # Some index quotes miss day range fields; derive from intraday candles.
                 low_f, high_f = _fetch_day_range_fallback_candidates([chosen_symbol, symbol])
+            if (
+                price_f is not None
+                and (low_f is None or high_f is None or high_f <= low_f)
+                and prev is not None
+            ):
+                # Quote-only symbols sometimes expose dayLow/dayHigh equal to last price; use
+                # a deterministic one-bar proxy from prev->last so range is still interpretable.
+                prev_f = float(prev)
+                if prev_f != price_f:
+                    low_f = min(prev_f, price_f)
+                    high_f = max(prev_f, price_f)
             if low_f is not None and high_f is not None and price_f is not None and high_f > low_f:
                 range_txt = _colorize(_range_line(low_f, high_f, price_f, width=12), "cyan")
             else:
@@ -1408,6 +1489,8 @@ def _print_index_catalog() -> int:
 def _normalize_snap_index_symbol(symbol: str) -> str:
     """Normalize an index symbol to the canonical key used by `snap` universes."""
     upper = symbol.strip().upper()
+    if upper in _INDEX_NORMALIZATION_ALIASES:
+        return _INDEX_NORMALIZATION_ALIASES[upper]
     if upper in _load_snap_universes():
         return upper
     # Resolve known index fallbacks to their canonical primary symbols.
@@ -1467,7 +1550,7 @@ def _index_quote_fallback_payload(symbol: str) -> dict[str, Any] | None:
     upper = symbol.strip().upper()
     if not upper:
         return None
-    candidates = [upper, *_INDEX_SYMBOL_FALLBACKS.get(upper, ())]
+    candidates = _index_probe_candidates(upper)
     snapshots = _batch_index_snapshots(candidates)
     for candidate in candidates:
         snapshot = snapshots.get(candidate, {})
@@ -1646,15 +1729,17 @@ def _batch_index_snapshots(symbols: list[str]) -> dict[str, dict[str, float | No
 
 def _resolve_group_candidate_snapshots(
     candidate_map: dict[str, list[str]],
+    enrich_day_range_from_symbol_candidates_fn: Callable[[list[str], dict[str, float | None]], None] | None = None,
 ) -> tuple[dict[str, tuple[str, dict[str, float | None]]], int]:
     """Resolve grouped snapshots with 3 batch passes, then direct per-symbol Ticker fallback."""
+    enrich_fn = enrich_day_range_from_symbol_candidates_fn or _enrich_snapshot_day_range_from_symbol_candidates
     return snapshot_service.resolve_group_candidate_snapshots(
         candidate_map=candidate_map,
         batch_index_snapshots_fn=_batch_index_snapshots,
         get_quote_payload=_get_quote_payload,
         has_quote_data=_has_quote_data,
         ticker_fallback_pause=_ticker_fallback_pause,
-        enrich_day_range_from_symbol_candidates_fn=_enrich_snapshot_day_range_from_symbol_candidates,
+        enrich_day_range_from_symbol_candidates_fn=enrich_fn,
         progress_scope=_progress_scope,
     )
 
@@ -4310,6 +4395,15 @@ def _run_repl(
         if preloaded_info is None and _is_known_index_symbol(resolved_symbol):
             preloaded_info = _index_quote_fallback_payload(resolved_symbol)
         if preloaded_info is None:
+            # Key control-flow choice: preserve index context switch even when quote data is unavailable.
+            if _is_known_index_symbol(resolved_symbol):
+                current_symbol = resolved_symbol
+                current_info = None
+                active_watchlist = None
+                print(f"Switched to index '{current_symbol}' (quote unavailable right now).", file=sys.stderr)
+                last_view_kind = "quote"
+                last_view_args = {}
+                continue
             print(f"Could not fetch quote for '{cmd}'.", file=sys.stderr)
             continue
         current_symbol = resolved_symbol

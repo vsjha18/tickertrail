@@ -36,7 +36,7 @@ Core commands:
   - Render publish time in local timezone with relative age when available; parse timestamp fields from both top-level items and nested `content` payloads.
   - Keep output compact: `* (age) headline` plus link on next line, one blank line between items, no source row.
   - Keep colors subtle and terminal-safe: cyan headline line + gray link line when ANSI color is available.
-  - Accept index aliases as `<code>` so `news` works for common index names (`nifty`, `it`, `metals`, `consumer`, `dow`).
+  - Accept index aliases as `<code>` so `news` works for common index names (`nifty`, `it`, `metals`, `consumer`, `defence`, `dow`).
 - `snap`: constituent price snapshot for supported active board index symbols.
 - `watchlist create <name>` / `wl create <name>`: create local watchlist.
 - `watchlist list` / `wl list`: list local watchlists.
@@ -245,6 +245,7 @@ Add tests for valid and invalid combinations.
 Implement India-first symbol resolution:
 - candidate order for bare symbol: `.NS`, `.BO`, then raw
 - handle known index aliases
+- Keep index aliases in index-resolution flow even when quote payload is empty; do not fall back to NSE fuzzy equity picker for alias tokens (for example `defence`).
 - if unresolved, fallback to local NSE universe fuzzy search
 - if one match, auto-pick
 - if multiple + TTY, ask user to choose
@@ -366,6 +367,7 @@ Default sections:
 - NIFTY PSE
 - NIFTY AUTO
 - NIFTY ENERGY
+- NIFTY DEFENCE
 - NIFTY FMCG
 - NIFTY MEDIA
 - NIFTY METAL
@@ -395,9 +397,20 @@ Board sorting:
 - Use canonical index symbols for PSE/PSU BANK (`^CNXPSE`, `^CNXPSUBANK`) to avoid stale synthetic series.
 - For index boards, run one unified three-pass batch cycle across India+Global symbols, then per-symbol fallback only for unresolved rows.
 - Group snapshot fetches use daily batch candles (`5d`, `1d`) for price/prev/day-range to reduce call volume.
-- Support shorthand nickname inference for index symbols (for example: `bank`, `pharma`, `infra`, `fmcg`, `metal`, `media`, `realty`, `energy`).
+- In `index` board resolution, skip quote-based day-range enrichment during candidate selection; compute missing ranges in render path via intraday fallback.
+- If range is still missing in `index` board but `regularMarketPrice` and `regularMarketPreviousClose` exist, render a proxy range using `min(prev,last)` to `max(prev,last)`.
+- If `regularMarketPreviousClose` is missing but quote payload has `regularMarketChange` and `regularMarketChangePercent`, render change from those direct fields in index board rows.
+- If batch snapshot lacks both previous-close and direct-change fields for an index row, do one targeted quote fetch for that row to backfill change before rendering `n/a`.
+- Support shorthand nickname inference for index symbols (for example: `bank`, `pharma`, `infra`, `fmcg`, `metal`, `media`, `realty`, `energy`, `defence`/`defense`).
 - Include `cpse` as a shorthand alias for `NIFTY PSE` (`^CNXPSE`).
 - Keep grouped retry policy consistent across multi-symbol quote surfaces (`index`, `snap`, and future grouped views): max three batch attempts, then direct per-symbol `Ticker` fallback.
+- For `NIFTY DEFENCE` quote resolution, use `NIFTY_IND_DEFENCE.NS` as preferred fallback before canonical `^CNXDEFENCE`.
+- Keep fallback probes minimal and data-backed:
+  - `^CNXMIDCAP` -> `NIFTY_MIDCAP_100.NS`
+  - `^NIFTYNXT50` -> `NIFTY_NEXT_50.NS`
+  - `^NSESMCP100` -> `NIFTY_SMLCAP_100.NS`
+  - `^CNXDEFENCE` -> `NIFTY_IND_DEFENCE.NS`
+  - Do not retain unverified alternates for other indices when canonical symbol already returns stable daily data.
 - During per-symbol `Ticker` fallback, add small random pacing (10-20ms) and adaptive backoff on consecutive misses to reduce throttling.
 - Make fallback pacing runtime-configurable via `src/tickertrail/conf.json`:
   - `ticker_fallback_jitter_min`
@@ -441,6 +454,7 @@ trend behavior:
 - Render one trend-score row per symbol and sort rows by trend score descending.
 - For index symbols without configured constituent universe, fall back to a single row for the index symbol itself.
 - On index alias symbol switches, if Yahoo `Ticker` quote is sparse, build quote-like payload from grouped snapshot fetch so quote view still renders.
+- If index quote fallback is still unavailable, keep the symbol switch to index mode and print a warning instead of rejecting the switch.
 
 relret behavior:
 - Works in watchlist mode and index/constituent contexts.
