@@ -2,7 +2,7 @@
 
 TickerTrail is a terminal app for tracking stocks and indices, comparing performance, and managing watchlists.
 
-It is optimized for India-first workflows (`.NS`/NSE aware) and also supports global symbols.
+It works well for India-first workflows (`.NS`/NSE aware) and also supports global symbols.
 
 ## Quick Start
 
@@ -89,22 +89,13 @@ Many commands are context-sensitive. You usually do not need arguments.
 ### 2) Index mode (`tickertrail>index>`)
 
 - Entered by typing an index alias/symbol (example: `nifty`, `it`, `defence`, `^cnxit`).
-- Index aliases are resolved directly into index context (they do not trigger equity fuzzy picker fallback when quote payload is temporarily sparse).
-- If quote data is unavailable at switch time, the app still enters index mode and prints a warning.
-- Yahoo index probing keeps a minimal fallback set to reduce dead calls:
-  - `^CNXMIDCAP` -> `NIFTY_MIDCAP_100.NS`
-  - `^NIFTYNXT50` -> `NIFTY_NEXT_50.NS`
-  - `^NSESMCP100` -> `NIFTY_SMLCAP_100.NS`
-  - `^CNXDEFENCE` -> `NIFTY_IND_DEFENCE.NS`
-- `index` board resolves prices first and applies intraday range fallback at render time for missing ranges (to avoid extra quote-probe chatter).
-- When day range is unavailable but `price`/`prevClose` exist, `index` board uses a `prev->last` proxy bar so range does not degrade to `n/a`.
-- When `prevClose` is missing but Yahoo provides direct change fields, `index` board uses `regularMarketChange`/`regularMarketChangePercent` instead of showing `Change n/a`.
+- If live quote fields are partial, TickerTrail still keeps you in index mode and shows the best available values.
 - `snap` shows constituents for supported indices.
 - `move`, `trend`, `relret`, `corr` can be run with no arguments:
-  - `move` runs over index constituents (or index fallback when constituents are unavailable).
-  - `trend` runs over index constituents (or index fallback).
-  - `relret` runs over index constituents with benchmark policy for index mode.
-  - `corr` runs over index constituents; needs at least two valid overlapping series.
+  - `move` runs over index constituents when available.
+  - `trend` runs over index constituents when available.
+  - `relret` runs over index constituents with an index-appropriate benchmark.
+  - `corr` runs over index constituents and needs at least two valid overlapping series.
 
 ### 3) Watchlist mode (`<watchlist-name>>`)
 
@@ -342,8 +333,8 @@ Final           118.48      126.02      122.63
 
 - `h` / `help [topic|command]`: help system
 - `quote` / `q`: show active symbol/index quote
-- `cache`: show today's persisted history-cache summary
-- `cache clear`: clear today's persisted history cache bucket
+- `cache`: show today's history cache summary
+- `cache clear`: clear today's history cache
 - `reload` / `r`: refresh quote and replay last chart/table
 - `cd ..`: return to previous index/watchlist context
 - `cls` / `clear`: clear terminal
@@ -367,7 +358,7 @@ Final           118.48      126.02      122.63
 - Intraday table: `tt [<symbol>] [<1m|5m|15m|30m|1hr>]`
 - Multi-symbol compare: `cmp <symbol1> <symbol2> [symbolN ...] [period [agg]]`
 
-Token reminders:
+Period and aggregation tokens:
 - Period units: `d`, `w`, `mo`, `y`, `max`
 - Aggregation units: `m`, `d`, `w`, `mo`
 - `m` means minute, `mo` means month
@@ -427,11 +418,11 @@ t nifty 6mo w
 
 ## Notes
 
-- Some data fields can be partially available depending on symbol/interval.
+- Some symbols/intervals can return partial market data.
 - Intraday availability can vary by symbol and market session.
-- Intraday history cache is interval-aware with short TTL refresh windows (`1m` fastest, then `5m`, `15m+`) so `cc 1m` and `cc 5m` may differ when sampled at different times.
-- Quote `Day Range` and `52W Range` bars auto-scale to terminal width to keep each range on a single line when possible.
-- Optional direct-start mode (without entering REPL first) is supported, for example:
+- `cc 1m` and `cc 5m` can differ slightly because of timing and data availability.
+- Quote `Day Range` and `52W Range` are rendered as terminal-friendly bars.
+- You can also start directly with a symbol, for example:
 
 ```bash
 uv run tickertrail RELIANCE
