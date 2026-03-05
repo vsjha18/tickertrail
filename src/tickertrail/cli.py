@@ -2551,6 +2551,25 @@ def _parse_scope_override_no_period(
     return cleaned[1:], None
 
 
+def _is_relret_period_token(token: str | None) -> bool:
+    """Return True for relret-supported period tokens.
+
+    relret keeps curated short horizons and also allows any positive integer
+    year horizon (`Ny`) like `2y`, `3y`, or `10y`.
+    """
+    if token is None:
+        return False
+    if token in _MOVES_PERIODS:
+        return True
+    if token.endswith("y"):
+        try:
+            years = int(token[:-1])
+        except (TypeError, ValueError):
+            return False
+        return years > 0
+    return False
+
+
 def _parse_relret_args(args: list[str]) -> tuple[list[str] | None, str | None, str | None, str | None]:
     """Parse `relret` grammar with optional explicit symbols and benchmark override.
 
@@ -2560,8 +2579,8 @@ def _parse_relret_args(args: list[str]) -> tuple[list[str] | None, str | None, s
     - `relret on <code1> <code2> ... [period] [vs <benchmark> [period]]`
     """
     usage = (
-        "Usage: relret [7d|1mo|3mo|6mo|9mo|1y] [vs <benchmark>] | "
-        "relret on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|1y] [vs <benchmark>]"
+        "Usage: relret [7d|1mo|3mo|6mo|9mo|Ny] [vs <benchmark>] | "
+        "relret on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|Ny] [vs <benchmark>]"
     )
     cleaned = [token.strip() for token in args if token.strip()]
     if not cleaned:
@@ -2585,7 +2604,7 @@ def _parse_relret_args(args: list[str]) -> tuple[list[str] | None, str | None, s
             return None, None, None, usage
         if len(tail) == 2:
             maybe_period = _normalize_period_token(tail[1])
-            if maybe_period is None or maybe_period not in _MOVES_PERIODS:
+            if not _is_relret_period_token(maybe_period):
                 return None, None, None, usage
             period_after_vs = maybe_period
         head_tokens = cleaned[:vs_idx]
@@ -2604,7 +2623,7 @@ def _parse_relret_args(args: list[str]) -> tuple[list[str] | None, str | None, s
         period_token = period_after_vs or "1mo"
         if len(symbol_tokens) > 1:
             maybe_period = _normalize_period_token(symbol_tokens[-1])
-            if maybe_period in _MOVES_PERIODS:
+            if _is_relret_period_token(maybe_period):
                 if period_after_vs is not None:
                     return None, None, None, usage
                 period_token = maybe_period
@@ -2618,7 +2637,7 @@ def _parse_relret_args(args: list[str]) -> tuple[list[str] | None, str | None, s
     if len(head_tokens) > 1:
         return None, None, None, usage
     token = _normalize_period_token(head_tokens[0])
-    if token is None or token not in _MOVES_PERIODS:
+    if not _is_relret_period_token(token):
         return None, None, None, usage
     if period_after_vs is not None:
         return None, None, None, usage
@@ -3488,13 +3507,14 @@ def _run_repl(
                 command="relret",
                 aliases=["rr"],
                 usage_lines=[
-                    "relret [7d|1mo|3mo|6mo|9mo|1y] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|1y]]",
-                    "relret on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|1y] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|1y]]",
+                    "relret [7d|1mo|3mo|6mo|9mo|Ny] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|Ny]]",
+                    "relret on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|Ny] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|Ny]]",
                 ],
                 detail_lines=[
                     "Shows symbol return, benchmark return, and relative return.",
                     "Use `on <codes...>` to override active context with explicit symbols.",
                     "Use `vs <benchmark>` to override benchmark selection.",
+                    "Ny means any positive integer years (for example: 2y, 3y, 10y).",
                     "Rows are sorted by strongest outperformance first.",
                 ],
                 default_lines=["period: 1mo"],

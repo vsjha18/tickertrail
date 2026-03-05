@@ -58,8 +58,8 @@ Core commands:
 - `move on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|1y]`: explicit symbol override for `move`/`moves`.
 - `trend` in watchlist mode: show current trend-score rows for all symbols (`trends` alias supported).
 - `trend on <code1> <code2> ...`: explicit symbol override for `trend`/`trends`.
-- `relret [7d|1mo|3mo|6mo|9mo|1y] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|1y]]` in watchlist mode: show relative-return ranking (alias `rr`; default `1mo`).
-- `relret on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|1y] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|1y]]`: explicit symbol override for `relret`.
+- `relret [7d|1mo|3mo|6mo|9mo|Ny] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|Ny]]` in watchlist mode: show relative-return ranking (alias `rr`; default `1mo`; `Ny` means any positive integer years like `2y`, `3y`).
+- `relret on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|Ny] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|Ny]]`: explicit symbol override for `relret`.
 - `corr [1mo|3mo|6mo|9mo|1y]` in watchlist mode: show return-correlation summary (default `1mo`).
 - `corr on <code1> <code2> ... [1mo|3mo|6mo|9mo|1y]`: explicit symbol override for `corr`.
   - sort rows as gainers first (largest gain to smallest), then losers (smallest fall to largest), then unknowns.

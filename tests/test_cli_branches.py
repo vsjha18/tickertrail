@@ -723,17 +723,25 @@ class BranchHelperTests(unittest.TestCase):
     def test_parse_relret_args_with_vs_and_on(self):
         self.assertEqual(cli._parse_relret_args([]), (None, "1mo", None, None))
         self.assertEqual(cli._parse_relret_args(["3mo"]), (None, "3mo", None, None))
+        self.assertEqual(cli._parse_relret_args(["2y"]), (None, "2y", None, None))
         self.assertEqual(cli._parse_relret_args(["3mo", "vs", "it"]), (None, "3mo", "it", None))
+        self.assertEqual(cli._parse_relret_args(["3y", "vs", "it"]), (None, "3y", "it", None))
         self.assertEqual(cli._parse_relret_args(["vs", "it", "6mo"]), (None, "6mo", "it", None))
+        self.assertEqual(cli._parse_relret_args(["vs", "it", "2y"]), (None, "2y", "it", None))
         self.assertEqual(
             cli._parse_relret_args(["on", "infy", "tcs", "6mo", "vs", "it"]),
             (["infy", "tcs"], "6mo", "it", None),
+        )
+        self.assertEqual(
+            cli._parse_relret_args(["on", "infy", "tcs", "3y", "vs", "it"]),
+            (["infy", "tcs"], "3y", "it", None),
         )
         self.assertEqual(
             cli._parse_relret_args(["on", "infy", "tcs", "vs", "it", "6mo"]),
             (["infy", "tcs"], "6mo", "it", None),
         )
         self.assertEqual(cli._parse_relret_args(["vs", "it"]), (None, "1mo", "it", None))
+        self.assertIn("Usage: relret", cli._parse_relret_args(["0y"])[3] or "")
         self.assertIn("Usage: relret", cli._parse_relret_args(["on", "vs", "it"])[3] or "")
         self.assertIn("Usage: relret", cli._parse_relret_args(["on", "infy", "vs"])[3] or "")
         self.assertIn("Usage: relret", cli._parse_relret_args(["on", "infy", "6mo", "vs", "it", "3mo"])[3] or "")
