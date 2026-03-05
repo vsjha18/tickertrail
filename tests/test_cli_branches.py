@@ -1,5 +1,6 @@
 import datetime as dt
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -437,6 +438,28 @@ class BranchHelperTests(unittest.TestCase):
         self.assertIn("Risk", txt)
         self.assertIn("Extremes", txt)
         mock_daily.assert_called_once_with("INFY.NS", "1y")
+
+    @patch("tickertrail.views.shutil.get_terminal_size", return_value=os.terminal_size((64, 24)))
+    @patch("tickertrail.cli._fetch_daily_ohlcv_for_period", return_value=([], [], [], [], []))
+    def test_print_quote_range_lines_use_compact_width_on_narrow_term(self, _mock_daily, _mock_term):
+        info = {
+            "shortName": "INFY",
+            "currency": "INR",
+            "regularMarketPrice": 1288.90,
+            "regularMarketPreviousClose": 1300.10,
+            "regularMarketOpen": 1291.00,
+            "regularMarketDayLow": 1273.00,
+            "regularMarketDayHigh": 1298.80,
+            "fiftyTwoWeekLow": 1264.10,
+            "fiftyTwoWeekHigh": 1732.95,
+        }
+        with patch("tickertrail.cli._range_line", wraps=cli._range_line) as mock_range:
+            rc = cli._print_quote("INFY", "INFY.NS", include_after_hours=False, preloaded_info=info)
+        self.assertEqual(rc, 0)
+        day_call = mock_range.call_args_list[0]
+        wk52_call = mock_range.call_args_list[1]
+        self.assertLess(day_call.kwargs["width"], 40)
+        self.assertLess(wk52_call.kwargs["width"], 40)
 
     @patch("tickertrail.cli._fetch_daily_ohlcv_for_period", return_value=([], [], [], [], []))
     def test_print_quote_year_low_high_fallback_and_no_afterhours(self, _mock_daily):

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import math
+import shutil
 import sys
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -106,8 +108,23 @@ def print_rebased_table_output(
     bench_100 = [100.0 * p / bench_values[0] for p in bench_values]
     print(f"\nRebased Co-Plot (base=100): {symbol.upper()} vs {benchmark_label} [{period_token}, {interval}]")
     print(f"Date Range: {dates[0]} -> {dates[-1]}")
+    intraday_intervals = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
+    sampling_note: str | None = None
+    if interval == "1mo":
+        row_indices = list(range(len(dates)))
+    elif interval in intraday_intervals:
+        max_rows = 24
+        if len(dates) <= max_rows:
+            row_indices = list(range(len(dates)))
+        else:
+            step = max(1, math.ceil(len(dates) / max_rows))
+            row_indices = list(range(0, len(dates), step))
+            if row_indices[-1] != len(dates) - 1:
+                row_indices.append(len(dates) - 1)
+            sampling_note = f"Sampled every {step} bars (base interval: {interval})."
+    else:
+        row_indices = checkpoint_indices_fn(len(dates), 6)
     print(f"{'Date':<10} {'Stock':>9} {'Bench':>9} {'Delta':>9} {'Alpha%':>9}")
-    row_indices = list(range(len(dates))) if interval == "1mo" else checkpoint_indices_fn(len(dates), 6)
     for idx in row_indices:
         stock_v = stock_100[idx]
         bench_v = bench_100[idx]
@@ -118,6 +135,8 @@ def print_rebased_table_output(
         d_txt = colorize(f"{delta:>+9.2f}", color_by_sign(delta))
         a_txt = colorize(f"{alpha:>+8.2f}%", color_by_sign(alpha))
         print(f"{dates[idx]:<10} {s_txt} {b_txt} {d_txt} {a_txt}")
+    if sampling_note is not None:
+        print(sampling_note)
     final_rel = stock_100[-1] - bench_100[-1]
     final_rel_txt = colorize(f"{final_rel:+.2f}", color_by_sign(final_rel))
     final_alpha = timeframe.outperformance_pct(stock_100[-1], bench_100[-1])
@@ -146,13 +165,30 @@ def print_compare_table_output(
     symbol_width = max(9, min(16, max(len(symbol) for symbol in resolved_symbols)))
     header = [f"{'Date':<10}", *[f"{symbol:>{symbol_width}}" for symbol in resolved_symbols]]
     print(" ".join(header))
-    row_indices = list(range(len(dates))) if interval == "1mo" else checkpoint_indices_fn(len(dates), 6)
+    intraday_intervals = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
+    sampling_note: str | None = None
+    if interval == "1mo":
+        row_indices = list(range(len(dates)))
+    elif interval in intraday_intervals:
+        max_rows = 24
+        if len(dates) <= max_rows:
+            row_indices = list(range(len(dates)))
+        else:
+            step = max(1, math.ceil(len(dates) / max_rows))
+            row_indices = list(range(0, len(dates), step))
+            if row_indices[-1] != len(dates) - 1:
+                row_indices.append(len(dates) - 1)
+            sampling_note = f"Sampled every {step} bars (base interval: {interval})."
+    else:
+        row_indices = checkpoint_indices_fn(len(dates), 6)
     for idx in row_indices:
         cells = [f"{dates[idx]:<10}"]
         for symbol in resolved_symbols:
             value = float(frame.iloc[idx][symbol])
             cells.append(colorize(f"{value:>{symbol_width}.2f}", "cyan"))
         print(" ".join(cells))
+    if sampling_note is not None:
+        print(sampling_note)
 
     final_cells = [f"{'Final':<10}"]
     for symbol in resolved_symbols:
@@ -235,8 +271,19 @@ def print_quote(
         day_low_f = day_high_f = price_f = None
     trend_dots = recent_direction_dots_fn(resolved_symbol, days=30)
 
+    def _range_width_for_quote(label: str, low: float, high: float) -> int:
+        """Compute quote range-bar width so the whole line usually fits in one terminal row."""
+        cols = shutil.get_terminal_size(fallback=(120, 24)).columns
+        suffix = f"{low:,.2f} .. {high:,.2f}"
+        fixed = len(label) + 2 + len(suffix) + 2
+        # Keep bars readable but clamp aggressively on narrow terminals.
+        return max(18, min(40, cols - fixed))
+
     if day_low_f is not None and day_high_f is not None and price_f is not None and day_high_f > day_low_f:
-        day_line = colorize(range_line(day_low_f, day_high_f, price_f, width=40), "cyan")
+        day_line = colorize(
+            range_line(day_low_f, day_high_f, price_f, width=_range_width_for_quote("Day Range", day_low_f, day_high_f)),
+            "cyan",
+        )
         print(f"Day Range  {day_line}  {day_low_f:,.2f} .. {day_high_f:,.2f}")
 
     try:
@@ -245,7 +292,15 @@ def print_quote(
     except (TypeError, ValueError):
         wk52_low_f = wk52_high_f = None
     if wk52_low_f is not None and wk52_high_f is not None and price_f is not None and wk52_high_f > wk52_low_f:
-        wk52_line = colorize(range_line(wk52_low_f, wk52_high_f, price_f, width=40), "yellow")
+        wk52_line = colorize(
+            range_line(
+                wk52_low_f,
+                wk52_high_f,
+                price_f,
+                width=_range_width_for_quote("52W Range", wk52_low_f, wk52_high_f),
+            ),
+            "yellow",
+        )
         print(f"52W Range  {wk52_line}  {wk52_low_f:,.2f} .. {wk52_high_f:,.2f}")
     if trend_dots is not None:
         print(f"30D Moves  {trend_dots}")

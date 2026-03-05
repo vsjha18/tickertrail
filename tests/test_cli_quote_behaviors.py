@@ -20,6 +20,11 @@ class ParserNoNetworkGuardTests(unittest.TestCase):
         parsed_cc, err_cc = _parse_intraday_command_args(["banknifty", "5m"])
         self.assertIsNone(err_cc)
         self.assertIsNotNone(parsed_cc)
+        parsed_1hr, err_1hr = _parse_intraday_command_args(["1hr"])
+        self.assertIsNone(err_1hr)
+        self.assertIsNotNone(parsed_1hr)
+        assert parsed_1hr is not None
+        self.assertEqual(parsed_1hr.interval, "1h")
 
         err_val = _validate_period_interval("2y", "1wk")
         self.assertIsNone(err_val)

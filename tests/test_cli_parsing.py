@@ -69,6 +69,19 @@ class IntradayParserTests(unittest.TestCase):
         self.assertEqual(parsed.benchmark_input, "nifty")
         self.assertEqual(parsed.interval, "5m")
 
+    def test_intraday_extended_intervals(self) -> None:
+        parsed_30m, err_30m = _parse_intraday_command_args(["30m"])
+        self.assertIsNone(err_30m)
+        self.assertIsNotNone(parsed_30m)
+        assert parsed_30m is not None
+        self.assertEqual(parsed_30m.interval, "30m")
+
+        parsed_1hr, err_1hr = _parse_intraday_command_args(["1hr"])
+        self.assertIsNone(err_1hr)
+        self.assertIsNotNone(parsed_1hr)
+        assert parsed_1hr is not None
+        self.assertEqual(parsed_1hr.interval, "1h")
+
     def test_intraday_invalid_interval(self) -> None:
         parsed, err = _parse_intraday_command_args(["nifty", "mo"])
         self.assertIsNone(parsed)
