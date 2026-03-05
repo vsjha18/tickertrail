@@ -17,6 +17,7 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -228,7 +229,6 @@ _SNAP_ALLOWED_INDEX_SYMBOLS: set[str] = {
     *(symbol for symbol, _label in _INDIA_INDEX_BOARD if symbol != "^INDIAVIX"),
     "^DJI",
 }
-_MOVES_PERIODS: tuple[str, ...] = ("7d", "1mo", "3mo", "6mo", "9mo", "1y")
 _MOVES_DAYS_BY_PERIOD: dict[str, int] = {
     "7d": 7,
     "1mo": 30,
@@ -237,7 +237,7 @@ _MOVES_DAYS_BY_PERIOD: dict[str, int] = {
     "9mo": 270,
     "1y": 365,
 }
-_CORR_PERIODS: tuple[str, ...] = ("1mo", "3mo", "6mo", "9mo", "1y")
+_ANALYTICS_PERIOD_HINT = "Nd|Nmo(<12)|Ny"
 _RUNTIME_CONFIG_CACHE: dict[str, float] | None = None
 _INDEX_BOARD_SYMBOLS: set[str] = {*(symbol.upper() for symbol, _ in _INDIA_INDEX_BOARD), *(symbol.upper() for symbol, _ in _GLOBAL_INDEX_BOARD)}
 
@@ -2484,14 +2484,13 @@ def _print_watchlist_snapshot(watchlist_name: str) -> int:
 def _parse_moves_period(args: list[str]) -> tuple[str | None, str | None]:
     """Parse `moves` period argument and enforce supported horizons."""
     if len(args) > 1:
-        return None, "Usage: moves [7d|1mo|3mo|6mo|9mo|1y]"
+        return None, f"Usage: moves [{_ANALYTICS_PERIOD_HINT}]"
     if not args:
         return "1mo", None
 
     token = _normalize_period_token(args[0])
-    # Keep the command semantics explicit: only curated horizons are allowed.
-    if token is None or token not in _MOVES_PERIODS:
-        return None, "Usage: moves [7d|1mo|3mo|6mo|9mo|1y]"
+    if not _is_analytics_period_token(token):
+        return None, f"Usage: moves [{_ANALYTICS_PERIOD_HINT}]"
     return token, None
 
 
@@ -2499,11 +2498,20 @@ def _parse_scope_override_with_period(
     args: list[str],
     *,
     command_name: str,
-    period_tokens: set[str],
+    period_tokens: set[str] | None = None,
     default_period: str,
+    period_validator: Callable[[str | None], bool] | None = None,
+    period_hint: str | None = None,
 ) -> tuple[list[str] | None, str | None, str | None]:
     """Parse optional `on <codes...> [period]` grammar for analytics commands."""
-    period_hint = "|".join(sorted(period_tokens, key=lambda token: (_period_token_days(token) or 0, token)))
+    if period_validator is None:
+        token_set = period_tokens or set()
+        period_validator = lambda token: token in token_set if token is not None else False
+    if period_hint is None:
+        if period_tokens:
+            period_hint = "|".join(sorted(period_tokens, key=lambda token: (_period_token_days(token) or 0, token)))
+        else:
+            period_hint = "period"
     usage = f"Usage: {command_name} [{period_hint}] | {command_name} on <code1> <code2> ... [{period_hint}]"
     cleaned = [token.strip() for token in args if token.strip()]
     if not cleaned:
@@ -2513,7 +2521,7 @@ def _parse_scope_override_with_period(
         if len(cleaned) != 1:
             return None, None, usage
         token = _normalize_period_token(cleaned[0])
-        if token is None or token not in period_tokens:
+        if not period_validator(token):
             return None, None, usage
         return None, token, None
 
@@ -2526,7 +2534,7 @@ def _parse_scope_override_with_period(
     period_token = default_period
     if len(symbol_inputs) > 1:
         maybe_period = _normalize_period_token(symbol_inputs[-1])
-        if maybe_period in period_tokens:
+        if period_validator(maybe_period):
             period_token = maybe_period
             symbol_inputs = symbol_inputs[:-1]
         elif maybe_period is not None:
@@ -2551,23 +2559,20 @@ def _parse_scope_override_no_period(
     return cleaned[1:], None
 
 
-def _is_relret_period_token(token: str | None) -> bool:
-    """Return True for relret-supported period tokens.
-
-    relret keeps curated short horizons and also allows any positive integer
-    year horizon (`Ny`) like `2y`, `3y`, or `10y`.
-    """
+def _is_analytics_period_token(token: str | None) -> bool:
+    """Return True for analytics-board period tokens (`Nd`, `Nmo<12`, `Ny`)."""
     if token is None:
         return False
-    if token in _MOVES_PERIODS:
-        return True
-    if token.endswith("y"):
-        try:
-            years = int(token[:-1])
-        except (TypeError, ValueError):
-            return False
-        return years > 0
-    return False
+    match = re.fullmatch(r"(\d+)(d|mo|y)", token)
+    if not match:
+        return False
+    count = int(match.group(1))
+    unit = match.group(2)
+    if count <= 0:
+        return False
+    if unit == "mo":
+        return count < 12
+    return True
 
 
 def _parse_relret_args(args: list[str]) -> tuple[list[str] | None, str | None, str | None, str | None]:
@@ -2579,8 +2584,8 @@ def _parse_relret_args(args: list[str]) -> tuple[list[str] | None, str | None, s
     - `relret on <code1> <code2> ... [period] [vs <benchmark> [period]]`
     """
     usage = (
-        "Usage: relret [7d|1mo|3mo|6mo|9mo|Ny] [vs <benchmark>] | "
-        "relret on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|Ny] [vs <benchmark>]"
+        f"Usage: relret [{_ANALYTICS_PERIOD_HINT}] [vs <benchmark>] | "
+        f"relret on <code1> <code2> ... [{_ANALYTICS_PERIOD_HINT}] [vs <benchmark>]"
     )
     cleaned = [token.strip() for token in args if token.strip()]
     if not cleaned:
@@ -2604,7 +2609,7 @@ def _parse_relret_args(args: list[str]) -> tuple[list[str] | None, str | None, s
             return None, None, None, usage
         if len(tail) == 2:
             maybe_period = _normalize_period_token(tail[1])
-            if not _is_relret_period_token(maybe_period):
+            if not _is_analytics_period_token(maybe_period):
                 return None, None, None, usage
             period_after_vs = maybe_period
         head_tokens = cleaned[:vs_idx]
@@ -2623,7 +2628,7 @@ def _parse_relret_args(args: list[str]) -> tuple[list[str] | None, str | None, s
         period_token = period_after_vs or "1mo"
         if len(symbol_tokens) > 1:
             maybe_period = _normalize_period_token(symbol_tokens[-1])
-            if _is_relret_period_token(maybe_period):
+            if _is_analytics_period_token(maybe_period):
                 if period_after_vs is not None:
                     return None, None, None, usage
                 period_token = maybe_period
@@ -2637,7 +2642,7 @@ def _parse_relret_args(args: list[str]) -> tuple[list[str] | None, str | None, s
     if len(head_tokens) > 1:
         return None, None, None, usage
     token = _normalize_period_token(head_tokens[0])
-    if not _is_relret_period_token(token):
+    if not _is_analytics_period_token(token):
         return None, None, None, usage
     if period_after_vs is not None:
         return None, None, None, usage
@@ -2647,14 +2652,13 @@ def _parse_relret_args(args: list[str]) -> tuple[list[str] | None, str | None, s
 def _parse_corr_period(args: list[str]) -> tuple[str | None, str | None]:
     """Parse `corr` period argument and enforce supported horizons."""
     if len(args) > 1:
-        return None, "Usage: corr [1mo|3mo|6mo|9mo|1y]"
+        return None, f"Usage: corr [{_ANALYTICS_PERIOD_HINT}]"
     if not args:
         return "1mo", None
 
     token = _normalize_period_token(args[0])
-    # Correlation needs a stable window; keep tiny horizons out of default grammar.
-    if token is None or token not in _CORR_PERIODS:
-        return None, "Usage: corr [1mo|3mo|6mo|9mo|1y]"
+    if not _is_analytics_period_token(token):
+        return None, f"Usage: corr [{_ANALYTICS_PERIOD_HINT}]"
     return token, None
 
 
@@ -3476,12 +3480,13 @@ def _run_repl(
                 command="move",
                 aliases=["moves"],
                 usage_lines=[
-                    "move [7d|1mo|3mo|6mo|9mo|1y]",
-                    "move on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|1y]",
+                    f"move [{_ANALYTICS_PERIOD_HINT}]",
+                    f"move on <code1> <code2> ... [{_ANALYTICS_PERIOD_HINT}]",
                 ],
                 detail_lines=[
                     "Shows directional dots per symbol for active context (symbol/index/watchlist).",
                     "Use `on <codes...>` to override active context with explicit symbols.",
+                    "Periods accept Nd, Nmo (<12), or Ny (for example: 5d, 2mo, 3y).",
                     "Rows are sorted by max green days to least green days.",
                 ],
                 default_lines=["period: 1mo"],
@@ -3507,14 +3512,14 @@ def _run_repl(
                 command="relret",
                 aliases=["rr"],
                 usage_lines=[
-                    "relret [7d|1mo|3mo|6mo|9mo|Ny] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|Ny]]",
-                    "relret on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|Ny] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|Ny]]",
+                    f"relret [{_ANALYTICS_PERIOD_HINT}] [vs <benchmark> [{_ANALYTICS_PERIOD_HINT}]]",
+                    f"relret on <code1> <code2> ... [{_ANALYTICS_PERIOD_HINT}] [vs <benchmark> [{_ANALYTICS_PERIOD_HINT}]]",
                 ],
                 detail_lines=[
                     "Shows symbol return, benchmark return, and relative return.",
                     "Use `on <codes...>` to override active context with explicit symbols.",
                     "Use `vs <benchmark>` to override benchmark selection.",
-                    "Ny means any positive integer years (for example: 2y, 3y, 10y).",
+                    "Periods accept Nd, Nmo (<12), or Ny (for example: 5d, 2mo, 3y).",
                     "Rows are sorted by strongest outperformance first.",
                 ],
                 default_lines=["period: 1mo"],
@@ -3525,10 +3530,14 @@ def _run_repl(
             _print_command_help(
                 command="corr",
                 aliases=[],
-                usage_lines=["corr [1mo|3mo|6mo|9mo|1y]", "corr on <code1> <code2> ... [1mo|3mo|6mo|9mo|1y]"],
+                usage_lines=[
+                    f"corr [{_ANALYTICS_PERIOD_HINT}]",
+                    f"corr on <code1> <code2> ... [{_ANALYTICS_PERIOD_HINT}]",
+                ],
                 detail_lines=[
                     "Shows compact correlation summary for active context.",
                     "Use `on <codes...>` to override active context with explicit symbols.",
+                    "Periods accept Nd, Nmo (<12), or Ny (for example: 5d, 2mo, 3y).",
                     "Sections: most positive pairs, most negative pairs, near-zero diversifier pairs.",
                 ],
                 default_lines=["period: 1mo"],
@@ -4018,8 +4027,9 @@ def _run_repl(
             symbol_inputs, period_token, parse_error = _parse_scope_override_with_period(
                 args,
                 command_name="moves",
-                period_tokens=_MOVES_PERIODS,
                 default_period="1mo",
+                period_validator=_is_analytics_period_token,
+                period_hint=_ANALYTICS_PERIOD_HINT,
             )
             if parse_error:
                 print(parse_error, file=sys.stderr)
@@ -4064,8 +4074,9 @@ def _run_repl(
             symbol_inputs, period_token, parse_error = _parse_scope_override_with_period(
                 cmd.split()[1:],
                 command_name="corr",
-                period_tokens=_CORR_PERIODS,
                 default_period="1mo",
+                period_validator=_is_analytics_period_token,
+                period_hint=_ANALYTICS_PERIOD_HINT,
             )
             if parse_error:
                 print(parse_error, file=sys.stderr)

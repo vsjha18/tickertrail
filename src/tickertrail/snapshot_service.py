@@ -57,10 +57,10 @@ def series_for_symbol_field(df: pd.DataFrame, symbol: str, field: str) -> pd.Ser
         return None
     try:
         if isinstance(df.columns, pd.MultiIndex):
-            lvl0 = set(df.columns.get_level_values(0))
-            if symbol in lvl0:
+            top_level_columns = set(df.columns.get_level_values(0))
+            if symbol in top_level_columns:
                 series = df[symbol][field]
-            elif field in lvl0:
+            elif field in top_level_columns:
                 series = df[field][symbol]
             else:
                 return None

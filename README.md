@@ -389,15 +389,17 @@ Inside watchlist mode (`<name>>`):
 - `snap`
 - `move [period]`
 - `move on <code1> <code2> ... [period]`
+  - `move` period accepts `Nd`, `Nmo` (`N < 12`), or `Ny` (for example `5d`, `2mo`, `3y`).
 - `trend`
 - `trend on <code1> <code2> ...`
 - `relret [period]`
 - `rr [period]`
 - `relret [period] [vs <benchmark> [period]]`
 - `relret on <code1> <code2> ... [period] [vs <benchmark> [period]]`
-  - `relret` period accepts `7d`, `1mo`, `3mo`, `6mo`, `9mo`, and any positive integer years (`Ny`, for example `2y`, `3y`, `10y`).
+  - `relret` period accepts `Nd`, `Nmo` (`N < 12`), or `Ny` (for example `5d`, `2mo`, `3y`).
 - `corr [period]`
 - `corr on <code1> <code2> ... [period]`
+  - `corr` period accepts `Nd`, `Nmo` (`N < 12`), or `Ny` (for example `5d`, `2mo`, `3y`).
 
 ## Example Session
 

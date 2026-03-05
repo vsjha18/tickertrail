@@ -117,7 +117,7 @@ class OutperformanceMathTests(unittest.TestCase):
         self.assertEqual(_outperformance_pct(100.0, 0.0), 0.0)
 
 
-class AdditionalCoverageTests(unittest.TestCase):
+class AdditionalParserBehaviorTests(unittest.TestCase):
     def test_parse_compare_with_period_and_agg(self) -> None:
         parsed, err = _parse_compare_command_args(["nifty", "goldbees", "hdfcbank", "3y", "w"])
         self.assertIsNone(err)

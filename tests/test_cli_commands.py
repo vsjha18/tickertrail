@@ -19,7 +19,7 @@ def _mk_df(index, close, low=None, high=None):
     return pd.DataFrame(data, index=pd.DatetimeIndex(index))
 
 
-class HelperCoverageTests(unittest.TestCase):
+class HelperBehaviorTests(unittest.TestCase):
     def test_basic_formatters_and_colors(self):
         self.assertIn(cli._color_by_sign(1.0), {"green", "red"})
         self.assertEqual(cli._color_by_sign(0.0), "gray")
@@ -310,7 +310,7 @@ class HelperCoverageTests(unittest.TestCase):
             finally:
                 cli._WATCHLIST_DB_JSON = old_db
 
-    def test_watchlist_helpers_branch_coverage(self):
+    def test_watchlist_helpers_handle_edge_cases(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "db.json"
             old_db = cli._WATCHLIST_DB_JSON
@@ -444,8 +444,8 @@ class HelperCoverageTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("NTPC.NS", txt)
         with patch("sys.stderr", new_callable=io.StringIO) as err:
-            rc2 = cli._print_code_matches("zzz")
-        self.assertEqual(rc2, 2)
+            no_match_rc = cli._print_code_matches("zzz")
+        self.assertEqual(no_match_rc, 2)
         self.assertIn("No code matches found", err.getvalue())
 
     @patch("sys.stdin.isatty", return_value=False)
@@ -554,7 +554,7 @@ class HelperCoverageTests(unittest.TestCase):
         self.assertNotIn("Alpha%", txt)
 
 
-class RenderCoverageTests(unittest.TestCase):
+class RenderBehaviorTests(unittest.TestCase):
     @patch("tickertrail.cli.plt")
     @patch("tickertrail.cli._benchmark_symbol_for", return_value=("^NSEI", "NIFTY 50"))
     @patch("tickertrail.cli._fetch_close_points_for_token")
@@ -635,8 +635,8 @@ class RenderCoverageTests(unittest.TestCase):
         self.assertEqual(rc, 0)
 
         mock_fetch.side_effect = [([], [])]
-        rc2 = cli._render_rebased_table("BEL.NS", {"currency": "INR"}, "^NSEI", "NIFTY 50", "1y", "1mo")
-        self.assertEqual(rc2, 3)
+        rc_no_stock_history = cli._render_rebased_table("BEL.NS", {"currency": "INR"}, "^NSEI", "NIFTY 50", "1y", "1mo")
+        self.assertEqual(rc_no_stock_history, 3)
 
     @patch("tickertrail.cli._fetch_close_points_for_token")
     @patch("tickertrail.cli._resolve_symbol_with_fallback")
@@ -672,8 +672,8 @@ class RenderCoverageTests(unittest.TestCase):
             self.assertIn("NIFTY NEXT 50", out.getvalue())
             self.assertIn("NIFTY MIDCAP SELECT", out.getvalue())
         with patch("sys.stdout", new_callable=io.StringIO) as out:
-            rc2 = cli._print_index_catalog()
-            self.assertEqual(rc2, 0)
+            catalog_rc = cli._print_index_catalog()
+            self.assertEqual(catalog_rc, 0)
             self.assertIn("Index Catalog", out.getvalue())
             self.assertIn("NIFTY INFRA", out.getvalue())
             self.assertIn("NIFTY DEFENCE", out.getvalue())
@@ -824,7 +824,7 @@ class RenderCoverageTests(unittest.TestCase):
         self.assertIsInstance(cli._is_market_open_now("AAPL", {"currency": "USD"}), bool)
 
 
-class MainAndReplCoverageTests(unittest.TestCase):
+class MainAndReplBehaviorTests(unittest.TestCase):
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._print_quote", return_value=0)
     @patch("tickertrail.cli._render_compare_table", return_value=0)

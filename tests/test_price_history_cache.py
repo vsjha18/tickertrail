@@ -76,14 +76,14 @@ class DailyHistoryCacheTests(unittest.TestCase):
                 price_history.reset_cache_metrics()
 
                 with patch("tickertrail.price_history._cache_day", return_value="2026-02-22"):
-                    p1, c1 = price_history.fetch_close_points_for_token(
+                    first_points, first_closes = price_history.fetch_close_points_for_token(
                         symbol="RELIANCE.NS",
                         period_token="1y",
                         interval="1d",
                         download_fn=fake_download,
                         track_network_call=lambda _name: None,
                     )
-                    p2, c2 = price_history.fetch_close_points_for_token(
+                    second_points, second_closes = price_history.fetch_close_points_for_token(
                         symbol="RELIANCE.NS",
                         period_token="1y",
                         interval="1d",
@@ -91,8 +91,8 @@ class DailyHistoryCacheTests(unittest.TestCase):
                         track_network_call=lambda _name: None,
                     )
                 self.assertEqual(len(calls), 1)
-                self.assertEqual(c1, c2)
-                self.assertEqual(len(p1), len(p2))
+                self.assertEqual(first_closes, second_closes)
+                self.assertEqual(len(first_points), len(second_points))
                 metrics = price_history.cache_metrics_snapshot()
                 self.assertEqual(metrics["hits"], 1)
                 self.assertEqual(metrics["misses"], 1)

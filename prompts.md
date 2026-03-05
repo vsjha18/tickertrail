@@ -54,14 +54,14 @@ Core commands:
 - `delete <code...>`: remove symbols from active watchlist mode.
 - `list` in watchlist mode: print symbols in current watchlist.
 - `snap` in watchlist mode: show snapshot for symbols in that watchlist.
-- `move [7d|1mo|3mo|6mo|9mo|1y]` in watchlist mode: show move-dot rows for all symbols (`moves` alias supported; default `1mo`).
-- `move on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|1y]`: explicit symbol override for `move`/`moves`.
+- `move [Nd|Nmo(<12)|Ny]` in watchlist mode: show move-dot rows for all symbols (`moves` alias supported; default `1mo`).
+- `move on <code1> <code2> ... [Nd|Nmo(<12)|Ny]`: explicit symbol override for `move`/`moves`.
 - `trend` in watchlist mode: show current trend-score rows for all symbols (`trends` alias supported).
 - `trend on <code1> <code2> ...`: explicit symbol override for `trend`/`trends`.
-- `relret [7d|1mo|3mo|6mo|9mo|Ny] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|Ny]]` in watchlist mode: show relative-return ranking (alias `rr`; default `1mo`; `Ny` means any positive integer years like `2y`, `3y`).
-- `relret on <code1> <code2> ... [7d|1mo|3mo|6mo|9mo|Ny] [vs <benchmark> [7d|1mo|3mo|6mo|9mo|Ny]]`: explicit symbol override for `relret`.
-- `corr [1mo|3mo|6mo|9mo|1y]` in watchlist mode: show return-correlation summary (default `1mo`).
-- `corr on <code1> <code2> ... [1mo|3mo|6mo|9mo|1y]`: explicit symbol override for `corr`.
+- `relret [Nd|Nmo(<12)|Ny] [vs <benchmark> [Nd|Nmo(<12)|Ny]]` in watchlist mode: show relative-return ranking (alias `rr`; default `1mo`).
+- `relret on <code1> <code2> ... [Nd|Nmo(<12)|Ny] [vs <benchmark> [Nd|Nmo(<12)|Ny]]`: explicit symbol override for `relret`.
+- `corr [Nd|Nmo(<12)|Ny]` in watchlist mode: show return-correlation summary (default `1mo`).
+- `corr on <code1> <code2> ... [Nd|Nmo(<12)|Ny]`: explicit symbol override for `corr`.
   - sort rows as gainers first (largest gain to smallest), then losers (smallest fall to largest), then unknowns.
   - include `Equal-Weight 1D` as average of available constituent daily percent changes.
   - include benchmark diagnostics:

@@ -311,17 +311,17 @@ class BranchHelperTests(unittest.TestCase):
     @patch("sys.stdin.isatty", return_value=True)
     def test_choose_symbol_cancel(self, _mock_tty):
         with patch("builtins.input", side_effect=["0"]):
-            out = cli._choose_symbol_from_options("x", [{"symbol": "A", "name": "A", "exchange": "NSE", "type": "EQUITY"}])
-        self.assertEqual(out, "A")
+            single_option_choice = cli._choose_symbol_from_options("x", [{"symbol": "A", "name": "A", "exchange": "NSE", "type": "EQUITY"}])
+        self.assertEqual(single_option_choice, "A")
         with patch("builtins.input", side_effect=["0"]):
-            out2 = cli._choose_symbol_from_options(
+            cancelled_choice = cli._choose_symbol_from_options(
                 "x",
                 [
                     {"symbol": "A", "name": "A", "exchange": "NSE", "type": "EQUITY"},
                     {"symbol": "B", "name": "B", "exchange": "NSE", "type": "EQUITY"},
                 ],
             )
-        self.assertIsNone(out2)
+        self.assertIsNone(cancelled_choice)
 
     @patch("sys.stdin.isatty", return_value=False)
     def test_choose_symbol_non_tty_multiple_options_returns_none(self, _mock_tty):
@@ -388,12 +388,12 @@ class BranchHelperTests(unittest.TestCase):
 
     @patch("tickertrail.cli._resolve_symbol_with_fallback", return_value=("X", None))
     def test_resolve_benchmark_helpers_error(self, _mock_resolve):
-        s, l, e = cli._resolve_benchmark_for_table("AAPL", None, "bad")
-        self.assertIsNone(s)
-        self.assertIsNotNone(e)
-        s2, e2 = cli._resolve_benchmark_override("bad")
-        self.assertIsNone(s2)
-        self.assertIsNotNone(e2)
+        benchmark_symbol, _benchmark_label, resolve_error = cli._resolve_benchmark_for_table("AAPL", None, "bad")
+        self.assertIsNone(benchmark_symbol)
+        self.assertIsNotNone(resolve_error)
+        override_symbol, override_error = cli._resolve_benchmark_override("bad")
+        self.assertIsNone(override_symbol)
+        self.assertIsNotNone(override_error)
 
     def test_benchmark_market_helpers(self):
         self.assertEqual(cli._benchmark_symbol_for("RELIANCE.NS", {"currency": "INR"})[0], "^NSEI")
@@ -403,19 +403,19 @@ class BranchHelperTests(unittest.TestCase):
         self.assertEqual(cli._market_profile_for("AAPL", {"currency": "USD"})[1:], (9, 30, 16, 0))
 
     def test_extend_intraday_edges_and_downsample(self):
-        p, pr = cli._extend_intraday_to_close([], [], "5m", "AAPL", {"currency": "USD"})
-        self.assertEqual((p, pr), ([], []))
-        p2, pr2 = cli._extend_intraday_to_close(
+        extended_points, extended_prices = cli._extend_intraday_to_close([], [], "5m", "AAPL", {"currency": "USD"})
+        self.assertEqual((extended_points, extended_prices), ([], []))
+        unchanged_points, unchanged_prices = cli._extend_intraday_to_close(
             [dt.datetime(2026, 2, 16, 21, 0, tzinfo=dt.timezone.utc)],
             [1.0],
             "x",
             "AAPL",
             {"currency": "USD"},
         )
-        self.assertEqual((p2, pr2), ([dt.datetime(2026, 2, 16, 21, 0, tzinfo=dt.timezone.utc)], [1.0]))
-        d, v = cli._downsample_series(["a", "b", "c", "d"], [1, 2, 3, 4], 3)
-        self.assertEqual(d[-1], "d")
-        self.assertEqual(v[-1], 4)
+        self.assertEqual((unchanged_points, unchanged_prices), ([dt.datetime(2026, 2, 16, 21, 0, tzinfo=dt.timezone.utc)], [1.0]))
+        downsampled_dates, downsampled_values = cli._downsample_series(["a", "b", "c", "d"], [1, 2, 3, 4], 3)
+        self.assertEqual(downsampled_dates[-1], "d")
+        self.assertEqual(downsampled_values[-1], 4)
 
     def test_build_rebased_frame_none_conditions(self):
         tz = dt.timezone.utc
@@ -632,14 +632,19 @@ class BranchHelperTests(unittest.TestCase):
         self.assertIsNone(cli._count_green_days_from_closes([1.0, 2.0], days=3))
         self.assertEqual(cli._parse_moves_period([]), ("1mo", None))
         self.assertEqual(cli._parse_moves_period(["6mo"]), ("6mo", None))
-        self.assertIsNone(cli._parse_moves_period(["2y"])[0])
+        self.assertEqual(cli._parse_moves_period(["2y"]), ("2y", None))
+        self.assertEqual(cli._parse_moves_period(["5d"]), ("5d", None))
+        self.assertEqual(cli._parse_moves_period(["11mo"]), ("11mo", None))
+        self.assertIsNone(cli._parse_moves_period(["12mo"])[0])
         self.assertEqual(cli._parse_moves_period(["1mo", "1y"])[0], None)
         self.assertAlmostEqual(cli._period_return_from_closes([100.0, 110.0]) or 0.0, 10.0, places=8)
         self.assertIsNone(cli._period_return_from_closes([100.0]))
         self.assertIsNone(cli._period_return_from_closes([0.0, 10.0]))
         self.assertEqual(cli._parse_corr_period([]), ("1mo", None))
         self.assertEqual(cli._parse_corr_period(["3mo"]), ("3mo", None))
-        self.assertEqual(cli._parse_corr_period(["7d"])[0], None)
+        self.assertEqual(cli._parse_corr_period(["7d"]), ("7d", None))
+        self.assertEqual(cli._parse_corr_period(["2y"]), ("2y", None))
+        self.assertEqual(cli._parse_corr_period(["12mo"])[0], None)
         self.assertEqual(cli._parse_corr_period(["1mo", "3mo"])[0], None)
         self.assertEqual(cli._moves_days_for_period("custom"), 30)
 
@@ -680,15 +685,16 @@ class BranchHelperTests(unittest.TestCase):
             )
 
     def test_parse_scope_override_helpers(self):
+        allowed_periods = {"1mo", "3mo", "6mo"}
         self.assertEqual(
-            cli._parse_scope_override_with_period([], command_name="moves", period_tokens=cli._MOVES_PERIODS, default_period="1mo"),
+            cli._parse_scope_override_with_period([], command_name="moves", period_tokens=allowed_periods, default_period="1mo"),
             (None, "1mo", None),
         )
         self.assertEqual(
             cli._parse_scope_override_with_period(
                 ["3mo"],
                 command_name="moves",
-                period_tokens=cli._MOVES_PERIODS,
+                period_tokens=allowed_periods,
                 default_period="1mo",
             ),
             (None, "3mo", None),
@@ -696,7 +702,7 @@ class BranchHelperTests(unittest.TestCase):
         scoped_symbols, scoped_period, scoped_err = cli._parse_scope_override_with_period(
             ["on", "infy", "tcs", "6mo"],
             command_name="moves",
-            period_tokens=cli._MOVES_PERIODS,
+            period_tokens=allowed_periods,
             default_period="1mo",
         )
         self.assertEqual((scoped_symbols, scoped_period, scoped_err), (["infy", "tcs"], "6mo", None))
@@ -705,7 +711,7 @@ class BranchHelperTests(unittest.TestCase):
             cli._parse_scope_override_with_period(
                 ["on", "infy", "2y"],
                 command_name="moves",
-                period_tokens=cli._MOVES_PERIODS,
+                period_tokens=allowed_periods,
                 default_period="1mo",
             )[2]
             or "",
@@ -724,10 +730,13 @@ class BranchHelperTests(unittest.TestCase):
         self.assertEqual(cli._parse_relret_args([]), (None, "1mo", None, None))
         self.assertEqual(cli._parse_relret_args(["3mo"]), (None, "3mo", None, None))
         self.assertEqual(cli._parse_relret_args(["2y"]), (None, "2y", None, None))
+        self.assertEqual(cli._parse_relret_args(["5d"]), (None, "5d", None, None))
+        self.assertEqual(cli._parse_relret_args(["11mo"]), (None, "11mo", None, None))
         self.assertEqual(cli._parse_relret_args(["3mo", "vs", "it"]), (None, "3mo", "it", None))
         self.assertEqual(cli._parse_relret_args(["3y", "vs", "it"]), (None, "3y", "it", None))
         self.assertEqual(cli._parse_relret_args(["vs", "it", "6mo"]), (None, "6mo", "it", None))
         self.assertEqual(cli._parse_relret_args(["vs", "it", "2y"]), (None, "2y", "it", None))
+        self.assertEqual(cli._parse_relret_args(["vs", "it", "5d"]), (None, "5d", "it", None))
         self.assertEqual(
             cli._parse_relret_args(["on", "infy", "tcs", "6mo", "vs", "it"]),
             (["infy", "tcs"], "6mo", "it", None),
@@ -737,11 +746,16 @@ class BranchHelperTests(unittest.TestCase):
             (["infy", "tcs"], "3y", "it", None),
         )
         self.assertEqual(
+            cli._parse_relret_args(["on", "infy", "tcs", "5d", "vs", "it"]),
+            (["infy", "tcs"], "5d", "it", None),
+        )
+        self.assertEqual(
             cli._parse_relret_args(["on", "infy", "tcs", "vs", "it", "6mo"]),
             (["infy", "tcs"], "6mo", "it", None),
         )
         self.assertEqual(cli._parse_relret_args(["vs", "it"]), (None, "1mo", "it", None))
         self.assertIn("Usage: relret", cli._parse_relret_args(["0y"])[3] or "")
+        self.assertIn("Usage: relret", cli._parse_relret_args(["12mo"])[3] or "")
         self.assertIn("Usage: relret", cli._parse_relret_args(["on", "vs", "it"])[3] or "")
         self.assertIn("Usage: relret", cli._parse_relret_args(["on", "infy", "vs"])[3] or "")
         self.assertIn("Usage: relret", cli._parse_relret_args(["on", "infy", "6mo", "vs", "it", "3mo"])[3] or "")
@@ -1308,7 +1322,7 @@ class BranchHelperTests(unittest.TestCase):
         self.assertEqual(snaps["^NSEI"]["regularMarketDayLow"], 99.0)
         self.assertEqual(snaps["^NSEI"]["regularMarketDayHigh"], 103.0)
 
-    def test_period_agg_and_checkpoint_edge_helpers(self):
+    def test_period_and_aggregation_helpers_cover_edge_cases(self):
         self.assertIsNone(cli._normalize_period_token("0d"))
         self.assertIsNone(cli._period_token_days("bad"))
         self.assertEqual(cli._normalize_agg_token("1wk"), "1wk")
@@ -1317,17 +1331,17 @@ class BranchHelperTests(unittest.TestCase):
         parsed, err = cli._parse_compare_command_args(["a", "b", "w"])
         self.assertIsNone(parsed)
         self.assertIsNotNone(err)
-        parsed2, err2 = cli._parse_compare_command_args(["a", "b", "bad", "w"])
-        self.assertIsNone(parsed2)
-        self.assertIn("Unsupported period token", str(err2))
-        parsed3, err3 = cli._parse_compare_command_args(["a", "b", "1y", "w"])
-        self.assertIsNotNone(parsed3)
-        self.assertIsNone(err3)
-        parsed4, err4 = cli._parse_compare_command_args(["a", "b", "bad"])
-        self.assertIsNotNone(parsed4)
-        self.assertIsNone(err4)
+        parsed_invalid_period, invalid_period_error = cli._parse_compare_command_args(["a", "b", "bad", "w"])
+        self.assertIsNone(parsed_invalid_period)
+        self.assertIn("Unsupported period token", str(invalid_period_error))
+        parsed_valid_period, valid_period_error = cli._parse_compare_command_args(["a", "b", "1y", "w"])
+        self.assertIsNotNone(parsed_valid_period)
+        self.assertIsNone(valid_period_error)
+        parsed_symbol_named_bad, symbol_named_bad_error = cli._parse_compare_command_args(["a", "b", "bad"])
+        self.assertIsNotNone(parsed_symbol_named_bad)
+        self.assertIsNone(symbol_named_bad_error)
 
-    def test_period_interval_default_helpers_extra_paths(self):
+    def test_period_interval_default_helpers_cover_non_standard_paths(self):
         self.assertEqual(cli._table_interval_for_period_token("max"), "1mo")
         self.assertEqual(cli._table_interval_for_period_token("bad"), "1d")
         self.assertEqual(cli._table_interval_for_period_token("1d"), "5m")
@@ -1376,10 +1390,10 @@ class BranchHelperTests(unittest.TestCase):
         self.assertIsNotNone(err)
 
     def test_resolve_benchmark_none_and_override_none(self):
-        s, l, e = cli._resolve_benchmark_for_table("AAPL", {"currency": "USD"}, None)
-        self.assertEqual((s, l, e), ("^IXIC", "NASDAQ", None))
-        s2, e2 = cli._resolve_benchmark_override(None)
-        self.assertEqual((s2, e2), (None, None))
+        benchmark_symbol, benchmark_label, resolve_error = cli._resolve_benchmark_for_table("AAPL", {"currency": "USD"}, None)
+        self.assertEqual((benchmark_symbol, benchmark_label, resolve_error), ("^IXIC", "NASDAQ", None))
+        override_symbol, override_error = cli._resolve_benchmark_override(None)
+        self.assertEqual((override_symbol, override_error), (None, None))
 
     def test_snap_symbol_normalization_and_universe_lookup(self):
         old_cache = cli._SNAP_UNIVERSE_CACHE
@@ -1520,8 +1534,8 @@ class BranchHelperTests(unittest.TestCase):
             cli._SNAP_UNIVERSE_CACHE = old
 
         with patch("sys.stderr", new_callable=io.StringIO) as err:
-            rc2 = cli._print_index_constituent_snap("^NOPE")
-            self.assertEqual(rc2, 3)
+            unsupported_index_rc = cli._print_index_constituent_snap("^NOPE")
+            self.assertEqual(unsupported_index_rc, 3)
             self.assertIn("Indian indices (except INDIA VIX) and DOW JONES", err.getvalue())
 
     @patch("tickertrail.cli._batch_index_snapshots")
@@ -1725,12 +1739,12 @@ class BranchRenderAndReplTests(unittest.TestCase):
         self.assertEqual(rc, 3)
         # no stock prices
         mock_fetch.return_value = ([], [])
-        rc2 = cli._render_rebased_table("X", None, "^NSEI", "NIFTY 50", "1y", "1mo")
-        self.assertEqual(rc2, 3)
+        rc_no_stock_prices = cli._render_rebased_table("X", None, "^NSEI", "NIFTY 50", "1y", "1mo")
+        self.assertEqual(rc_no_stock_prices, 3)
         # benchmark empty
         mock_fetch.side_effect = [([t], [1.0]), ([], [])]
-        rc3 = cli._render_rebased_table("X", None, "^NSEI", "NIFTY 50", "1y", "1mo")
-        self.assertEqual(rc3, 3)
+        rc_no_benchmark_prices = cli._render_rebased_table("X", None, "^NSEI", "NIFTY 50", "1y", "1mo")
+        self.assertEqual(rc_no_benchmark_prices, 3)
 
     @patch("tickertrail.cli._fetch_close_points_for_token", return_value=([], []))
     def test_draw_chart_error_branch(self, _mock_fetch):
@@ -1743,8 +1757,8 @@ class BranchRenderAndReplTests(unittest.TestCase):
         t0 = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
         t1 = dt.datetime(2026, 1, 2, tzinfo=dt.timezone.utc)
         mock_fetch.side_effect = [([t0], [100.0]), ([t1], [200.0])]
-        rc2 = cli._render_rebased_table("X", None, "^NSEI", "NIFTY 50", "1y", "1mo")
-        self.assertEqual(rc2, 3)
+        rc_no_overlap = cli._render_rebased_table("X", None, "^NSEI", "NIFTY 50", "1y", "1mo")
+        self.assertEqual(rc_no_overlap, 3)
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._resolve_symbol_with_fallback", return_value=("X", None))

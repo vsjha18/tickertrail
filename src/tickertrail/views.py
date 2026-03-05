@@ -46,9 +46,9 @@ def build_rebased_frame(
     if float(frame.iloc[0]["stock"]) == 0 or float(frame.iloc[0]["bench"]) == 0:
         return None
 
-    stock0 = float(frame.iloc[0]["stock"])
-    bench0 = float(frame.iloc[0]["bench"])
-    frame["bench_on_stock_axis"] = frame["bench"] * (stock0 / bench0)
+    stock_base_price = float(frame.iloc[0]["stock"])
+    benchmark_base_price = float(frame.iloc[0]["bench"])
+    frame["bench_on_stock_axis"] = frame["bench"] * (stock_base_price / benchmark_base_price)
     dt_index = pd.to_datetime(frame.index, unit="s", utc=True).tz_convert(tz)
     frame["date"] = dt_index.strftime("%H:%M" if intraday else "%d-%m-%y")
     return frame
