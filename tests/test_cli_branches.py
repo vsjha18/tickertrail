@@ -1326,6 +1326,7 @@ class BranchHelperTests(unittest.TestCase):
         self.assertIsNone(cli._normalize_period_token("0d"))
         self.assertIsNone(cli._period_token_days("bad"))
         self.assertEqual(cli._normalize_agg_token("1wk"), "1wk")
+        self.assertEqual(cli._normalize_agg_token("y"), "1y")
         self.assertEqual(cli._checkpoint_indices(0), [])
         self.assertEqual(len(cli._checkpoint_indices(10, points=6)), 6)
         parsed, err = cli._parse_compare_command_args(["a", "b", "w"])

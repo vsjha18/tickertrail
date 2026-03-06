@@ -117,7 +117,7 @@ Usability preference:
 
 Token conventions:
 - period units: `d`, `w`, `mo`, `y`, and `max`
-- aggregation units: `m` (minute), `d`, `w`, `mo`
+- aggregation units: `m` (minute), `d`, `w`, `mo`, `y`
 - strict meaning:
   - `m` is always minute
   - `mo` is always month

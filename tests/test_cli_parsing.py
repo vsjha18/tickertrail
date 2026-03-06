@@ -27,6 +27,14 @@ class SwingParserTests(unittest.TestCase):
         self.assertEqual(parsed.period_token, "2y")
         self.assertEqual(parsed.interval_override, "1mo")
 
+    def test_table_dash_period_yearly_agg(self) -> None:
+        parsed, err = _parse_swing_command_args(["-", "5y", "y"], command_name="t")
+        self.assertIsNone(err)
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.period_token, "5y")
+        self.assertEqual(parsed.interval_override, "1y")
+
     def test_chart_benchmark_dash_period_agg(self) -> None:
         parsed, err = _parse_swing_command_args(["nifty", "-", "3mo", "w"], command_name="c")
         self.assertIsNone(err)
@@ -165,6 +173,14 @@ class AdditionalParserBehaviorTests(unittest.TestCase):
         self.assertEqual(parsed.symbols, ("nifty", "goldbees", "hdfcbank"))
         self.assertEqual(parsed.period_token, "3y")
         self.assertEqual(parsed.interval_override, "1wk")
+
+    def test_parse_compare_with_yearly_agg(self) -> None:
+        parsed, err = _parse_compare_command_args(["nifty", "goldbees", "5y", "y"])
+        self.assertIsNone(err)
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.period_token, "5y")
+        self.assertEqual(parsed.interval_override, "1y")
 
     def test_parse_compare_without_period_uses_default_6mo(self) -> None:
         parsed, err = _parse_compare_command_args(["nifty", "goldbees"])

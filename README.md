@@ -364,7 +364,7 @@ Final           118.48      126.02      122.63
 
 Period and aggregation tokens:
 - Period units: `d`, `w`, `mo`, `y`, `max`
-- Aggregation units: `m`, `d`, `w`, `mo`
+- Aggregation units: `m`, `d`, `w`, `mo`, `y`
 - `m` means minute, `mo` means month
 
 Override examples (`t/c/cc/tt`):
@@ -372,6 +372,7 @@ Override examples (`t/c/cc/tt`):
 - Change only bin size: `t - w`, `c - mo`, `cc - 15m`, `tt - 30m`
 - Change benchmark + bin size: `t bank - w`, `c nifty - mo`, `cc bank - 15m`, `tt bank - 30m`
 - Change period + bin size (swing only): `t - 1y mo`, `c - 2y w`
+- Yearly binning example: `t - 5y y`
 
 ## Watchlists
 

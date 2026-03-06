@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 _PERIODS = ("1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max")
-_INTERVALS = ("1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo")
+_INTERVALS = ("1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo", "1y")
 _INTRADAY_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
 
 
@@ -60,7 +60,7 @@ def period_token_days(period_token: str) -> int | None:
 def normalize_agg_token(token: str) -> str | None:
     """Normalize aggregation token to a yfinance interval string."""
     t = token.strip().lower()
-    alias = {"m": "1m", "w": "1wk", "mo": "1mo", "d": "1d"}
+    alias = {"m": "1m", "w": "1wk", "mo": "1mo", "d": "1d", "y": "1y"}
     if t in alias:
         return alias[t]
     if t in _INTERVALS:

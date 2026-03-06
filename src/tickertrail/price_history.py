@@ -239,11 +239,15 @@ def fetch_close_points_for_token(
             except (TypeError, ValueError):
                 pass
 
+    # `1y` aggregation is app-level: fetch monthly data from Yahoo, then collapse to
+    # one bar per calendar year using each year's last available close.
+    effective_interval = "1mo" if interval == "1y" else interval
+
     # Use direct period fetch when Yahoo supports it; otherwise build explicit start/end.
     if token in ("1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"):
         track_network_call("yfinance.download")
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            df = download_fn(symbol, period=token, interval=interval, progress=False, auto_adjust=True)
+            df = download_fn(symbol, period=token, interval=effective_interval, progress=False, auto_adjust=True)
     else:
         days = timeframe.period_token_days(token)
         if days is None:
@@ -256,7 +260,7 @@ def fetch_close_points_for_token(
                 symbol,
                 start=start_dt.strftime("%Y-%m-%d"),
                 end=end_dt.strftime("%Y-%m-%d"),
-                interval=interval,
+                interval=effective_interval,
                 progress=False,
                 auto_adjust=True,
             )
@@ -268,6 +272,13 @@ def fetch_close_points_for_token(
         close = close.iloc[:, 0]
     idx = [i.to_pydatetime() for i in close.index]
     prices = [float(v) for v in close.tolist()]
+    if interval == "1y":
+        yearly_last: dict[int, tuple[dt.datetime, float]] = {}
+        for point, price in zip(idx, prices):
+            yearly_last[point.year] = (point, price)
+        compact = [yearly_last[year] for year in sorted(yearly_last)]
+        idx = [point for point, _ in compact]
+        prices = [price for _, price in compact]
     _cache_set(
         "close_points",
         symbol,

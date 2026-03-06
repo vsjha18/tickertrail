@@ -27,6 +27,50 @@ def _sample_df() -> pd.DataFrame:
 
 
 class DailyHistoryCacheTests(unittest.TestCase):
+    def test_close_points_yearly_aggregation_collapses_monthly_to_year_end(self) -> None:
+        """`1y` aggregation should return one last-close point per calendar year."""
+        index = pd.DatetimeIndex(
+            [
+                dt.datetime(2024, 1, 31),
+                dt.datetime(2024, 6, 30),
+                dt.datetime(2024, 12, 31),
+                dt.datetime(2025, 1, 31),
+                dt.datetime(2025, 8, 31),
+                dt.datetime(2025, 12, 31),
+            ]
+        )
+        monthly_df = pd.DataFrame({"Close": [100.0, 110.0, 120.0, 130.0, 140.0, 150.0]}, index=index)
+        download_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+        def fake_download(*args, **kwargs):
+            download_calls.append((args, kwargs))
+            return monthly_df
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            old_dir = price_history._CACHE_DIR
+            old_day = price_history._CACHE_DAY
+            old_store = price_history._CACHE_STORE
+            try:
+                price_history._CACHE_DIR = Path(td)
+                price_history._CACHE_DAY = None
+                price_history._CACHE_STORE = None
+                with patch("tickertrail.price_history._cache_day", return_value="2026-03-06"):
+                    points, closes = price_history.fetch_close_points_for_token(
+                        symbol="BEL.NS",
+                        period_token="5y",
+                        interval="1y",
+                        download_fn=fake_download,
+                        track_network_call=lambda _name: None,
+                    )
+                self.assertEqual(len(download_calls), 1)
+                self.assertEqual(download_calls[0][1]["interval"], "1mo")
+                self.assertEqual([point.year for point in points], [2024, 2025])
+                self.assertEqual(closes, [120.0, 150.0])
+            finally:
+                price_history._CACHE_DIR = old_dir
+                price_history._CACHE_DAY = old_day
+                price_history._CACHE_STORE = old_store
+
     def test_resolve_cache_dir_prefers_repo_root_from_cwd_ancestors(self) -> None:
         """Cache directory should resolve to repo root when cwd is inside a repo tree."""
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

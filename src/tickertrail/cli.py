@@ -32,7 +32,7 @@ from . import timeframe
 from . import views
 
 _PERIODS = ("1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max")
-_INTERVALS = ("1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo")
+_INTERVALS = ("1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo", "1y")
 _NSE_UNIVERSE_CSV = Path(__file__).resolve().parents[2] / "data" / "nse_equity_list.csv"
 _INDEX_CONSTITUENTS_CSV = Path(__file__).resolve().parents[2] / "data" / "index_constituents.csv"
 _WATCHLIST_DB_JSON = Path(__file__).resolve().parents[2] / "data" / "db.json"
@@ -1953,19 +1953,22 @@ def _parse_compare_command_args(args: list[str]) -> tuple[_ParsedCompareCommand 
     interval_override = None
     symbols_end = len(cleaned)
 
-    # Parse tail tokens from right to left so optional period/agg stay optional.
-    maybe_interval = _normalize_agg_token(cleaned[-1])
-    if maybe_interval is not None:
-        interval_override = maybe_interval
-        symbols_end -= 1
-        if symbols_end < 3:
+    # Parse optional tail as either `[period agg]` or `[period]`.
+    # Guardrail: prefer period interpretation for ambiguous tokens like `1y`.
+    if len(cleaned) >= 4:
+        maybe_interval = _normalize_agg_token(cleaned[-1])
+        maybe_period_before = _normalize_compare_period_token(cleaned[-2])
+        if maybe_interval is not None:
+            if maybe_period_before is None:
+                return None, f"Unsupported period token '{cleaned[-2]}'."
+            interval_override = maybe_interval
+            period_token = maybe_period_before
+            symbols_end -= 2
+    if symbols_end == len(cleaned):
+        maybe_interval_tail = _normalize_agg_token(cleaned[-1])
+        maybe_period_tail = _normalize_compare_period_token(cleaned[-1])
+        if maybe_interval_tail is not None and maybe_period_tail is None:
             return None, usage
-        normalized_period = _normalize_compare_period_token(cleaned[symbols_end - 1])
-        if normalized_period is None:
-            return None, f"Unsupported period token '{cleaned[symbols_end - 1]}'."
-        period_token = normalized_period
-        symbols_end -= 1
-    else:
         maybe_period = _normalize_compare_period_token(cleaned[-1])
         if maybe_period is not None and len(cleaned) >= 3:
             period_token = maybe_period
