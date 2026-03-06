@@ -329,6 +329,7 @@ Output after chart:
 - range stats
 - range line
 - optional 52W stats + 52W range line when quote fields are available
+- explicit last traded/close value line
 - move summary
 ```
 

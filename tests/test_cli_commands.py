@@ -602,6 +602,7 @@ class RenderBehaviorTests(unittest.TestCase):
             txt = out.getvalue()
         self.assertEqual(rc, 0)
         self.assertIn("Move:", txt)
+        self.assertIn("Last:", txt)
         self.assertIn("From: 15:00 -> 15:30", txt)
         self.assertNotIn("Rebased Co-Plot (base=100)", txt)
 

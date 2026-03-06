@@ -2330,6 +2330,7 @@ def _draw_chart(
     if wk52_low_f is not None and wk52_high_f is not None and wk52_high_f > wk52_low_f:
         wk52_bar = _colorize(_range_line(wk52_low_f, wk52_high_f, last_price, width=max(24, min(50, width // 2))), "yellow")
         print(f"52W Range  {wk52_bar}  {wk52_low_f:,.2f} .. {wk52_high_f:,.2f}")
+    print(f"Last: {last_price:,.2f}")
     print(f"Move: {move_txt} | From: {core_dates[0]} -> {core_dates[-1]}")
     if benchmark_dates and benchmark_prices and benchmark_label:
         print(f"Benchmark: {benchmark_label} ({benchmark_symbol}) rebased to start value")
