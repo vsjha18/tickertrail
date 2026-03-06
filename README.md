@@ -314,6 +314,8 @@ Final Relative (Stock - Bench): -0.07
 Final Alpha% (Stock vs Bench): -0.07%
 ```
 
+If intraday tables are long, rows are sampled for readability. In that case the header shows the base bin plus display stride (for example `bin=5m (shown every 2 bars)`), and a sampling note is printed below the table.
+
 ### Multi-Symbol Compare (`cmp`)
 
 ```text

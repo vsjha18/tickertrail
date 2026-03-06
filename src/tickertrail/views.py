@@ -12,6 +12,17 @@ import pandas as pd
 from . import timeframe
 
 
+def _format_table_bin_label(interval: str, sampled_step: int | None) -> str:
+    """Return a user-facing bin label for table headers.
+
+    For intraday tables, row sampling can reduce displayed cadence while keeping
+    the underlying fetch interval fixed. This label keeps that distinction clear.
+    """
+    if sampled_step is None or sampled_step <= 1:
+        return interval
+    return f"{interval} (shown every {sampled_step} bars)"
+
+
 def downsample_series(dates: list[str], prices: list[float], max_points: int) -> tuple[list[str], list[float]]:
     """Downsample paired date/price arrays to a display-friendly size."""
     if len(dates) <= max_points or max_points < 3:
@@ -106,10 +117,9 @@ def print_rebased_table_output(
 
     stock_100 = [100.0 * p / stock_values[0] for p in stock_values]
     bench_100 = [100.0 * p / bench_values[0] for p in bench_values]
-    print(f"\nRebased Co-Plot (base=100): {symbol.upper()} vs {benchmark_label} [period={period_token}, bin={interval}]")
-    print(f"Date Range: {dates[0]} -> {dates[-1]}")
     intraday_intervals = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
     sampling_note: str | None = None
+    sampled_step: int | None = None
     if interval == "1mo":
         row_indices = list(range(len(dates)))
     elif interval in intraday_intervals:
@@ -118,12 +128,16 @@ def print_rebased_table_output(
             row_indices = list(range(len(dates)))
         else:
             step = max(1, math.ceil(len(dates) / max_rows))
+            sampled_step = step
             row_indices = list(range(0, len(dates), step))
             if row_indices[-1] != len(dates) - 1:
                 row_indices.append(len(dates) - 1)
-            sampling_note = f"Sampled every {step} bars (base interval: {interval})."
+            sampling_note = f"Rows sampled for readability: every {step} bars from base bin {interval}."
     else:
         row_indices = checkpoint_indices_fn(len(dates), 6)
+    bin_label = _format_table_bin_label(interval, sampled_step)
+    print(f"\nRebased Co-Plot (base=100): {symbol.upper()} vs {benchmark_label} [period={period_token}, bin={bin_label}]")
+    print(f"Date Range: {dates[0]} -> {dates[-1]}")
     print(f"{'Date':<10} {'Stock':>9} {'Bench':>9} {'Delta':>9} {'Alpha%':>9}")
     for idx in row_indices:
         stock_v = stock_100[idx]
@@ -160,13 +174,11 @@ def print_compare_table_output(
         frame = frame.iloc[-24:].copy()
         dates = frame["date"].astype(str).tolist()
 
-    print(f"\nCompare (base=100): {', '.join(resolved_symbols)} [{period_token}, {interval}]")
-    print(f"Date Range: {dates[0]} -> {dates[-1]}")
     symbol_width = max(9, min(16, max(len(symbol) for symbol in resolved_symbols)))
     header = [f"{'Date':<10}", *[f"{symbol:>{symbol_width}}" for symbol in resolved_symbols]]
-    print(" ".join(header))
     intraday_intervals = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
     sampling_note: str | None = None
+    sampled_step: int | None = None
     if interval == "1mo":
         row_indices = list(range(len(dates)))
     elif interval in intraday_intervals:
@@ -175,12 +187,17 @@ def print_compare_table_output(
             row_indices = list(range(len(dates)))
         else:
             step = max(1, math.ceil(len(dates) / max_rows))
+            sampled_step = step
             row_indices = list(range(0, len(dates), step))
             if row_indices[-1] != len(dates) - 1:
                 row_indices.append(len(dates) - 1)
-            sampling_note = f"Sampled every {step} bars (base interval: {interval})."
+            sampling_note = f"Rows sampled for readability: every {step} bars from base bin {interval}."
     else:
         row_indices = checkpoint_indices_fn(len(dates), 6)
+    bin_label = _format_table_bin_label(interval, sampled_step)
+    print(f"\nCompare (base=100): {', '.join(resolved_symbols)} [period={period_token}, bin={bin_label}]")
+    print(f"Date Range: {dates[0]} -> {dates[-1]}")
+    print(" ".join(header))
     for idx in row_indices:
         cells = [f"{dates[idx]:<10}"]
         for symbol in resolved_symbols:

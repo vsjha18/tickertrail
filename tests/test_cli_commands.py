@@ -523,8 +523,8 @@ class HelperBehaviorTests(unittest.TestCase):
                 bench_values=[100.0 + i * 0.08 for i in range(80)],
             )
             intraday_txt = out.getvalue()
-        self.assertIn("Sampled every", intraday_txt)
-        self.assertIn("base interval: 5m", intraday_txt)
+        self.assertIn("bin=5m (shown every 4 bars)", intraday_txt)
+        self.assertIn("Rows sampled for readability", intraday_txt)
 
     def test_build_multi_rebased_frame_and_compare_output(self):
         tz = dt.timezone.utc
