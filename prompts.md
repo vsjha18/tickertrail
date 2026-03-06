@@ -84,18 +84,18 @@ Non-negotiable grammar:
 - `t`
 - `t <benchmark>`
 - `t <benchmark> <period>`
-- `t - <period> [agg]`
-- `t <benchmark> - <period> [agg]`
+- `t - <period|agg> [agg]`
+- `t <benchmark> - <period|agg> [agg]`
 - same grammar for `c`
 - `cc`, `cc <1m|5m|15m|30m|1hr>`, `cc <benchmark>`, `cc <benchmark> <1m|5m|15m|30m|1hr>`
 - `cc - <1m|5m|15m|30m|1hr>`, `cc <benchmark> - <1m|5m|15m|30m|1hr>`
 - `tt`, `tt <1m|5m|15m|30m|1hr>`, `tt <benchmark>`, `tt <benchmark> <1m|5m|15m|30m|1hr>`
 - `tt - <1m|5m|15m|30m|1hr>`, `tt <benchmark> - <1m|5m|15m|30m|1hr>`
 - canonical equivalents:
-  - `chart swing`, `chart swing <benchmark>`, `chart swing <benchmark> <period>`, `chart swing - <period> [agg]`, `chart swing <benchmark> - <period> [agg]`
+  - `chart swing`, `chart swing <benchmark>`, `chart swing <benchmark> <period>`, `chart swing - <period|agg> [agg]`, `chart swing <benchmark> - <period|agg> [agg]`
   - `chart intra`, `chart intra <1m|5m|15m|30m|1hr>`, `chart intra <benchmark>`, `chart intra <benchmark> <1m|5m|15m|30m|1hr>`
   - `chart intra - <1m|5m|15m|30m|1hr>`, `chart intra <benchmark> - <1m|5m|15m|30m|1hr>`
-  - `table swing`, `table swing <benchmark>`, `table swing <benchmark> <period>`, `table swing - <period> [agg]`, `table swing <benchmark> - <period> [agg]`
+  - `table swing`, `table swing <benchmark>`, `table swing <benchmark> <period>`, `table swing - <period|agg> [agg]`, `table swing <benchmark> - <period|agg> [agg]`
   - `table intra`, `table intra <1m|5m|15m|30m|1hr>`, `table intra <benchmark>`, `table intra <benchmark> <1m|5m|15m|30m|1hr>`
   - `table intra - <1m|5m|15m|30m|1hr>`, `table intra <benchmark> - <1m|5m|15m|30m|1hr>`
 - `cmp <symbol1> <symbol2> [symbolN ...] [period [agg]]`

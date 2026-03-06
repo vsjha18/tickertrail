@@ -355,8 +355,10 @@ Final           118.48      126.02      122.63
 ## Charts and Tables
 
 - Swing chart: `c [<benchmark>] [<period>]`
+- Swing chart (dash override): `c [<benchmark>] - <period|agg> [agg]`
 - Intraday chart: `cc [<benchmark>] [<1m|5m|15m|30m|1hr>]`
 - Swing table: `t [<benchmark>] [<period>]`
+- Swing table (dash override): `t [<benchmark>] - <period|agg> [agg]`
 - Intraday table: `tt [<benchmark>] [<1m|5m|15m|30m|1hr>]`
 - Multi-symbol compare: `cmp <symbol1> <symbol2> [symbolN ...] [period [agg]]`
 

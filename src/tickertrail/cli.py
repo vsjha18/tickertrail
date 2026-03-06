@@ -1806,36 +1806,49 @@ def _parse_swing_command_args(args: list[str], command_name: str) -> tuple[_Pars
     """Parse `t`/`c` command arguments into a dataclass-driven command spec."""
     usage = (
         f"Usage: {command_name} | {command_name} <benchmark> [period [agg]] | "
-        f"{command_name} - <period> [agg] | {command_name} <benchmark> - <period> [agg]"
+        f"{command_name} - <period|agg> [agg] | {command_name} <benchmark> - <period|agg> [agg]"
     )
     if len(args) == 0:
         return _ParsedSwingCommand(), None
 
-    # Dash form preserves benchmark context and only changes period/aggregation.
+    # Dash form preserves benchmark context and allows overriding either:
+    # 1) period only, 2) aggregation only, or 3) both period + aggregation.
     if args[0] == "-":
         if len(args) not in {2, 3}:
-            return None, f"Usage: {command_name} - <period> [agg]"
+            return None, f"Usage: {command_name} - <period|agg> [agg]"
         period_token = _normalize_period_token(args[1])
+        interval_override = _normalize_agg_token(args[1])
+        if len(args) == 2:
+            if period_token is not None:
+                return _ParsedSwingCommand(period_token=period_token), None
+            if interval_override is not None:
+                return _ParsedSwingCommand(interval_override=interval_override), None
+            return None, f"Unsupported period/aggregation token '{args[1]}'."
+
         if period_token is None:
             return None, f"Unsupported period token '{args[1]}'."
-        interval_override = None
-        if len(args) == 3:
-            interval_override = _normalize_agg_token(args[2])
-            if interval_override is None:
-                return None, f"Unsupported aggregation token '{args[2]}'."
-        return _ParsedSwingCommand(period_token=period_token, interval_override=interval_override), None
+        tail_interval = _normalize_agg_token(args[2])
+        if tail_interval is None:
+            return None, f"Unsupported aggregation token '{args[2]}'."
+        return _ParsedSwingCommand(period_token=period_token, interval_override=tail_interval), None
 
     if len(args) >= 2 and args[1] == "-":
         if len(args) not in {3, 4}:
-            return None, f"Usage: {command_name} <benchmark> - <period> [agg]"
+            return None, f"Usage: {command_name} <benchmark> - <period|agg> [agg]"
         period_token = _normalize_period_token(args[2])
+        interval_override = _normalize_agg_token(args[2])
+        if len(args) == 3:
+            if period_token is not None:
+                return _ParsedSwingCommand(period_token=period_token, benchmark_input=args[0]), None
+            if interval_override is not None:
+                return _ParsedSwingCommand(interval_override=interval_override, benchmark_input=args[0]), None
+            return None, f"Unsupported period/aggregation token '{args[2]}'."
+
         if period_token is None:
             return None, f"Unsupported period token '{args[2]}'."
-        interval_override = None
-        if len(args) == 4:
-            interval_override = _normalize_agg_token(args[3])
-            if interval_override is None:
-                return None, f"Unsupported aggregation token '{args[3]}'."
+        interval_override = _normalize_agg_token(args[3])
+        if interval_override is None:
+            return None, f"Unsupported aggregation token '{args[3]}'."
         return _ParsedSwingCommand(
             period_token=period_token,
             interval_override=interval_override,
@@ -3234,7 +3247,7 @@ def _run_repl(
             if normalized_topic in {"chart"}:
                 print("\nChart Commands:")
                 print("  chart swing [<benchmark>] [<period>]")
-                print("  chart swing [<benchmark>] - <period> [agg]")
+                print("  chart swing [<benchmark>] - <period|agg> [agg]")
                 print("  chart intra [<benchmark>] [<1m|5m|15m|30m|1hr>]")
                 print("  chart intra [<benchmark>] - <1m|5m|15m|30m|1hr>")
                 print("  c ...")
@@ -3249,7 +3262,7 @@ def _run_repl(
             if normalized_topic in {"table"}:
                 print("\nTable Commands:")
                 print("  table swing [<benchmark>] [<period>]")
-                print("  table swing [<benchmark>] - <period> [agg]")
+                print("  table swing [<benchmark>] - <period|agg> [agg]")
                 print("  table intra [<benchmark>] [<1m|5m|15m|30m|1hr>]")
                 print("  table intra [<benchmark>] - <1m|5m|15m|30m|1hr>")
                 print("  t ...")
@@ -3585,7 +3598,7 @@ def _run_repl(
             _print_command_help(
                 command="chart swing",
                 aliases=["c"],
-                usage_lines=["chart swing [<benchmark>] [<period>]", "chart swing [<benchmark>] - <period> [agg]"],
+                usage_lines=["chart swing [<benchmark>] [<period>]", "chart swing [<benchmark>] - <period|agg> [agg]"],
                 detail_lines=[
                     "Render swing chart with period and optional aggregation (bin size) override.",
                     "Active symbol stays unchanged; first positional token overrides benchmark.",
@@ -3614,7 +3627,7 @@ def _run_repl(
             _print_command_help(
                 command="c",
                 aliases=["chart swing"],
-                usage_lines=["c [<benchmark>] [<period>]", "c [<benchmark>] - <period> [agg]"],
+                usage_lines=["c [<benchmark>] [<period>]", "c [<benchmark>] - <period|agg> [agg]"],
                 detail_lines=[
                     "Short alias for swing chart command family.",
                     "Active symbol stays unchanged; first positional token overrides benchmark.",
@@ -3649,7 +3662,7 @@ def _run_repl(
             _print_command_help(
                 command="table swing",
                 aliases=["t"],
-                usage_lines=["table swing [<benchmark>] [<period>]", "table swing [<benchmark>] - <period> [agg]"],
+                usage_lines=["table swing [<benchmark>] [<period>]", "table swing [<benchmark>] - <period|agg> [agg]"],
                 detail_lines=[
                     "Render swing rebased stock-vs-benchmark table.",
                     "Active symbol stays unchanged; first positional token overrides benchmark.",
@@ -3678,7 +3691,7 @@ def _run_repl(
             _print_command_help(
                 command="t",
                 aliases=["table swing"],
-                usage_lines=["t [<benchmark>] [<period>]", "t [<benchmark>] - <period> [agg]"],
+                usage_lines=["t [<benchmark>] [<period>]", "t [<benchmark>] - <period|agg> [agg]"],
                 detail_lines=[
                     "Short alias for swing table command family.",
                     "Active symbol stays unchanged; first positional token overrides benchmark.",

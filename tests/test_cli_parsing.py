@@ -36,6 +36,24 @@ class SwingParserTests(unittest.TestCase):
         self.assertEqual(parsed.period_token, "3mo")
         self.assertEqual(parsed.interval_override, "1wk")
 
+    def test_chart_dash_agg_only(self) -> None:
+        parsed, err = _parse_swing_command_args(["-", "w"], command_name="c")
+        self.assertIsNone(err)
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.period_token, "6mo")
+        self.assertEqual(parsed.interval_override, "1wk")
+        self.assertIsNone(parsed.benchmark_input)
+
+    def test_chart_benchmark_dash_agg_only(self) -> None:
+        parsed, err = _parse_swing_command_args(["nifty", "-", "w"], command_name="c")
+        self.assertIsNone(err)
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.period_token, "6mo")
+        self.assertEqual(parsed.interval_override, "1wk")
+        self.assertEqual(parsed.benchmark_input, "nifty")
+
     def test_legacy_benchmark_only_retained(self) -> None:
         parsed, err = _parse_swing_command_args(["nifty"], command_name="t")
         self.assertIsNone(err)
@@ -49,7 +67,7 @@ class SwingParserTests(unittest.TestCase):
         self.assertIsNone(parsed)
         self.assertIsNotNone(err)
         assert err is not None
-        self.assertIn("Unsupported period token", err)
+        self.assertIn("Unsupported period/aggregation token", err)
 
 
 class IntradayParserTests(unittest.TestCase):
@@ -175,7 +193,7 @@ class AdditionalParserBehaviorTests(unittest.TestCase):
         self.assertIsNone(parsed)
         self.assertIsNotNone(err)
         assert err is not None
-        self.assertIn("Usage: t - <period> [agg]", err)
+        self.assertIn("Usage: t - <period|agg> [agg]", err)
 
     def test_parse_swing_invalid_agg_token_in_dash_form(self) -> None:
         parsed, err = _parse_swing_command_args(["-", "2y", "2w"], command_name="c")
@@ -189,14 +207,14 @@ class AdditionalParserBehaviorTests(unittest.TestCase):
         self.assertIsNone(parsed)
         self.assertIsNotNone(err)
         assert err is not None
-        self.assertIn("Usage: c <benchmark> - <period> [agg]", err)
+        self.assertIn("Usage: c <benchmark> - <period|agg> [agg]", err)
 
     def test_parse_swing_invalid_benchmark_dash_period(self) -> None:
         parsed, err = _parse_swing_command_args(["nifty", "-", "3m"], command_name="t")
         self.assertIsNone(parsed)
         self.assertIsNotNone(err)
         assert err is not None
-        self.assertIn("Unsupported period token", err)
+        self.assertIn("Unsupported period/aggregation token", err)
 
     def test_parse_swing_two_token_usage_error(self) -> None:
         parsed, err = _parse_swing_command_args(["nifty", "oops"], command_name="t")
