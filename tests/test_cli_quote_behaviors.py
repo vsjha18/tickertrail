@@ -99,14 +99,14 @@ class ReplNoNetworkBehaviorTests(unittest.TestCase):
     @patch("tickertrail.cli._print_quote", return_value=0)
     @patch("tickertrail.cli._resolve_benchmark_for_table", return_value=("^NSEI", "NIFTY 50", None))
     @patch("tickertrail.cli._render_rebased_table", return_value=0)
-    def test_tt_dash_allows_explicit_swing_period(
+    def test_tt_dash_allows_explicit_intraday_bin(
         self,
         mock_render_table,
         _mock_resolve_bench,
         _mock_print_quote,
         _mock_history,
     ) -> None:
-        with patch("builtins.input", side_effect=["tt - 2y mo", "exit"]):
+        with patch("builtins.input", side_effect=["tt - 15m", "exit"]):
             rc = _run_repl(
                 start_input_symbol="BEL",
                 start_resolved_symbol="BEL.NS",
@@ -116,8 +116,8 @@ class ReplNoNetworkBehaviorTests(unittest.TestCase):
             )
         self.assertEqual(rc, 0)
         kwargs = mock_render_table.call_args.kwargs
-        self.assertEqual(kwargs["period_token"], "2y")
-        self.assertEqual(kwargs["interval_override"], "1mo")
+        self.assertEqual(kwargs["period_token"], "1d")
+        self.assertEqual(kwargs["interval_override"], "15m")
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._get_quote_payload", side_effect=AssertionError("network call not expected"))

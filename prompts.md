@@ -82,20 +82,22 @@ Core commands:
 
 Non-negotiable grammar:
 - `t`
-- `t <code>`
-- `t <code> <period>`
+- `t <benchmark>`
+- `t <benchmark> <period>`
 - `t - <period> [agg]`
-- `t <code> - <period> [agg]`
+- `t <benchmark> - <period> [agg]`
 - same grammar for `c`
-- `cc`, `cc <1m|5m|15m|30m|1hr>`, `cc <code>`, `cc <code> <1m|5m|15m|30m|1hr>`
-- `tt`, `tt <1m|5m|15m|30m|1hr>`, `tt <code>`, `tt <code> <1m|5m|15m|30m|1hr>`
-- `tt - <period> [agg]`, `tt <code> - <period> [agg]`
+- `cc`, `cc <1m|5m|15m|30m|1hr>`, `cc <benchmark>`, `cc <benchmark> <1m|5m|15m|30m|1hr>`
+- `cc - <1m|5m|15m|30m|1hr>`, `cc <benchmark> - <1m|5m|15m|30m|1hr>`
+- `tt`, `tt <1m|5m|15m|30m|1hr>`, `tt <benchmark>`, `tt <benchmark> <1m|5m|15m|30m|1hr>`
+- `tt - <1m|5m|15m|30m|1hr>`, `tt <benchmark> - <1m|5m|15m|30m|1hr>`
 - canonical equivalents:
-  - `chart swing`, `chart swing <code>`, `chart swing <code> <period>`, `chart swing - <period> [agg]`, `chart swing <code> - <period> [agg]`
-  - `chart intra`, `chart intra <1m|5m|15m|30m|1hr>`, `chart intra <code>`, `chart intra <code> <1m|5m|15m|30m|1hr>`
-  - `table swing`, `table swing <code>`, `table swing <code> <period>`, `table swing - <period> [agg]`, `table swing <code> - <period> [agg]`
-  - `table intra`, `table intra <1m|5m|15m|30m|1hr>`, `table intra <code>`, `table intra <code> <1m|5m|15m|30m|1hr>`
-  - `table intra - <period> [agg]`, `table intra <code> - <period> [agg]`
+  - `chart swing`, `chart swing <benchmark>`, `chart swing <benchmark> <period>`, `chart swing - <period> [agg]`, `chart swing <benchmark> - <period> [agg]`
+  - `chart intra`, `chart intra <1m|5m|15m|30m|1hr>`, `chart intra <benchmark>`, `chart intra <benchmark> <1m|5m|15m|30m|1hr>`
+  - `chart intra - <1m|5m|15m|30m|1hr>`, `chart intra <benchmark> - <1m|5m|15m|30m|1hr>`
+  - `table swing`, `table swing <benchmark>`, `table swing <benchmark> <period>`, `table swing - <period> [agg]`, `table swing <benchmark> - <period> [agg]`
+  - `table intra`, `table intra <1m|5m|15m|30m|1hr>`, `table intra <benchmark>`, `table intra <benchmark> <1m|5m|15m|30m|1hr>`
+  - `table intra - <1m|5m|15m|30m|1hr>`, `table intra <benchmark> - <1m|5m|15m|30m|1hr>`
 - `cmp <symbol1> <symbol2> [symbolN ...] [period [agg]]`
 - `code <company-or-symbol-query>`
 - `watchlist create <name>` / `wl create <name>`
@@ -334,7 +336,7 @@ Output after chart:
 ```text
 Implement table-only mode (`t`) output:
 - title: "Rebased Co-Plot (base=100): ..."
-- include `[period, interval]`
+- include `[period=<period>, bin=<interval>]`
 - include explicit Date Range: start -> end
 - columns: Date, Stock, Bench, Delta, Alpha%
 - Alpha% definition: `((Stock / Bench) - 1) * 100` on rebased values
@@ -522,8 +524,8 @@ Minimum test matrix:
   - `tt nifty`
   - `tt nifty 5m`
   - `tt nifty 1hr`
-  - `tt - 2y mo`
-  - `tt nifty - 3mo w`
+  - `tt - 15m`
+  - `tt nifty - 30m`
 - c:
   - `c - 2y`
   - `c - 2y mo`

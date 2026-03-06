@@ -287,7 +287,7 @@ Move: +7.21 (+0.50%) | From: 05:55 -> 10:00
 ```text
 tickertrail> t 1y
 
-Rebased Co-Plot (base=100): ^CNXIT vs NIFTY 50 [1y, 1mo]
+Rebased Co-Plot (base=100): ^CNXIT vs NIFTY 50 [period=1y, bin=1mo]
 Date Range: 05-04-25 -> 01-03-26
 Date           Stock     Bench     Delta    Alpha%
 05-04-25      100.00    100.00     +0.00    +0.00%
@@ -303,7 +303,7 @@ Final Alpha% (Stock vs Bench): -1.37%
 ```text
 tickertrail> tt 15m
 
-Rebased Co-Plot (base=100): ^CNXIT vs NIFTY 50 [1d, 15m]
+Rebased Co-Plot (base=100): ^CNXIT vs NIFTY 50 [period=1d, bin=15m]
 Date Range: 21:45 -> 10:00
 Date           Stock     Bench     Delta    Alpha%
 21:45         100.00    100.00     +0.00    +0.00%
@@ -352,16 +352,22 @@ Final           118.48      126.02      122.63
 
 ## Charts and Tables
 
-- Swing chart: `c [<symbol>] [<period>]`
-- Intraday chart: `cc [<symbol>] [<1m|5m|15m|30m|1hr>]`
-- Swing table: `t [<symbol>] [<period>]`
-- Intraday table: `tt [<symbol>] [<1m|5m|15m|30m|1hr>]`
+- Swing chart: `c [<benchmark>] [<period>]`
+- Intraday chart: `cc [<benchmark>] [<1m|5m|15m|30m|1hr>]`
+- Swing table: `t [<benchmark>] [<period>]`
+- Intraday table: `tt [<benchmark>] [<1m|5m|15m|30m|1hr>]`
 - Multi-symbol compare: `cmp <symbol1> <symbol2> [symbolN ...] [period [agg]]`
 
 Period and aggregation tokens:
 - Period units: `d`, `w`, `mo`, `y`, `max`
 - Aggregation units: `m`, `d`, `w`, `mo`
 - `m` means minute, `mo` means month
+
+Override examples (`t/c/cc/tt`):
+- Active symbol stays the same; first positional token is benchmark override.
+- Change only bin size: `t - w`, `c - mo`, `cc - 15m`, `tt - 30m`
+- Change benchmark + bin size: `t bank - w`, `c nifty - mo`, `cc bank - 15m`, `tt bank - 30m`
+- Change period + bin size (swing only): `t - 1y mo`, `c - 2y w`
 
 ## Watchlists
 

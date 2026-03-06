@@ -106,7 +106,7 @@ def print_rebased_table_output(
 
     stock_100 = [100.0 * p / stock_values[0] for p in stock_values]
     bench_100 = [100.0 * p / bench_values[0] for p in bench_values]
-    print(f"\nRebased Co-Plot (base=100): {symbol.upper()} vs {benchmark_label} [{period_token}, {interval}]")
+    print(f"\nRebased Co-Plot (base=100): {symbol.upper()} vs {benchmark_label} [period={period_token}, bin={interval}]")
     print(f"Date Range: {dates[0]} -> {dates[-1]}")
     intraday_intervals = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
     sampling_note: str | None = None

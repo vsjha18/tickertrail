@@ -87,6 +87,27 @@ class IntradayParserTests(unittest.TestCase):
         self.assertIsNone(parsed)
         self.assertIsNotNone(err)
 
+    def test_intraday_dash_interval(self) -> None:
+        parsed, err = _parse_intraday_command_args(["-", "30m"], command_name="tt")
+        self.assertIsNone(err)
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.interval, "30m")
+        self.assertIsNone(parsed.benchmark_input)
+
+    def test_intraday_benchmark_dash_interval(self) -> None:
+        parsed, err = _parse_intraday_command_args(["bank", "-", "1hr"], command_name="tt")
+        self.assertIsNone(err)
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.interval, "1h")
+        self.assertEqual(parsed.benchmark_input, "bank")
+
+    def test_intraday_dash_rejects_period_token(self) -> None:
+        parsed, err = _parse_intraday_command_args(["-", "2y"], command_name="tt")
+        self.assertIsNone(parsed)
+        self.assertIsNotNone(err)
+
 
 class CompatibilityValidatorTests(unittest.TestCase):
     def test_intraday_limit_for_1m(self) -> None:
@@ -168,7 +189,7 @@ class AdditionalParserBehaviorTests(unittest.TestCase):
         self.assertIsNone(parsed)
         self.assertIsNotNone(err)
         assert err is not None
-        self.assertIn("Usage: c <code> - <period> [agg]", err)
+        self.assertIn("Usage: c <benchmark> - <period> [agg]", err)
 
     def test_parse_swing_invalid_benchmark_dash_period(self) -> None:
         parsed, err = _parse_swing_command_args(["nifty", "-", "3m"], command_name="t")

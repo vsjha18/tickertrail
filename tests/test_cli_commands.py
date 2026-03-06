@@ -863,7 +863,7 @@ class MainAndReplBehaviorTests(unittest.TestCase):
             "tt 15m",
             "tt sbin",
             "tt sbin 5m",
-            "tt - 2y mo",
+            "tt - 15m",
             "t nifty 3mo w",
             "cmp nifty goldbees hdfcbank 3y w",
             "cc",

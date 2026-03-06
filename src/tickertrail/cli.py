@@ -1805,8 +1805,8 @@ def _validate_period_interval(period_token: str, interval: str) -> str | None:
 def _parse_swing_command_args(args: list[str], command_name: str) -> tuple[_ParsedSwingCommand | None, str | None]:
     """Parse `t`/`c` command arguments into a dataclass-driven command spec."""
     usage = (
-        f"Usage: {command_name} | {command_name} <code> [period [agg]] | "
-        f"{command_name} - <period> [agg] | {command_name} <code> - <period> [agg]"
+        f"Usage: {command_name} | {command_name} <benchmark> [period [agg]] | "
+        f"{command_name} - <period> [agg] | {command_name} <benchmark> - <period> [agg]"
     )
     if len(args) == 0:
         return _ParsedSwingCommand(), None
@@ -1827,7 +1827,7 @@ def _parse_swing_command_args(args: list[str], command_name: str) -> tuple[_Pars
 
     if len(args) >= 2 and args[1] == "-":
         if len(args) not in {3, 4}:
-            return None, f"Usage: {command_name} <code> - <period> [agg]"
+            return None, f"Usage: {command_name} <benchmark> - <period> [agg]"
         period_token = _normalize_period_token(args[2])
         if period_token is None:
             return None, f"Unsupported period token '{args[2]}'."
@@ -1864,7 +1864,7 @@ def _parse_swing_command_args(args: list[str], command_name: str) -> tuple[_Pars
         period_token = _normalize_period_token(args[1])
         interval_override = _normalize_agg_token(args[2])
         if period_token is None or interval_override is None:
-            return None, f"Usage: {command_name} <code> <period> [agg]"
+            return None, f"Usage: {command_name} <benchmark> <period> [agg]"
         return _ParsedSwingCommand(
             period_token=period_token,
             interval_override=interval_override,
@@ -1878,10 +1878,27 @@ def _parse_intraday_command_args(args: list[str], command_name: str = "cc") -> t
     """Parse intraday command arguments into a dataclass-driven command spec."""
     usage = (
         f"Usage: {command_name} | {command_name} <1m|5m|15m|30m|1hr> | "
-        f"{command_name} <code> | {command_name} <code> <1m|5m|15m|30m|1hr>"
+        f"{command_name} <benchmark> | {command_name} <benchmark> <1m|5m|15m|30m|1hr> | "
+        f"{command_name} - <1m|5m|15m|30m|1hr> | {command_name} <benchmark> - <1m|5m|15m|30m|1hr>"
     )
     if len(args) == 0:
         return _ParsedIntradayCommand(), None
+    if args[0] == "-":
+        if len(args) != 2:
+            return None, usage
+        token = args[1].strip().lower()
+        normalized_interval = _REPL_INTRADAY_INTERVAL_ALIASES.get(token)
+        if normalized_interval is None:
+            return None, usage
+        return _ParsedIntradayCommand(interval=normalized_interval), None
+    if len(args) >= 2 and args[1] == "-":
+        if len(args) != 3:
+            return None, usage
+        token = args[2].strip().lower()
+        normalized_interval = _REPL_INTRADAY_INTERVAL_ALIASES.get(token)
+        if normalized_interval is None:
+            return None, usage
+        return _ParsedIntradayCommand(interval=normalized_interval, benchmark_input=args[0]), None
     if len(args) == 1:
         # Single token is either supported intraday interval (with aliases) or benchmark override.
         token = args[0].strip().lower()
@@ -3216,9 +3233,10 @@ def _run_repl(
                 return True
             if normalized_topic in {"chart"}:
                 print("\nChart Commands:")
-                print("  chart swing [<code>] [<period>]")
-                print("  chart swing [<code>] - <period> [agg]")
-                print("  chart intra [<code>] [<1m|5m|15m|30m|1hr>]")
+                print("  chart swing [<benchmark>] [<period>]")
+                print("  chart swing [<benchmark>] - <period> [agg]")
+                print("  chart intra [<benchmark>] [<1m|5m|15m|30m|1hr>]")
+                print("  chart intra [<benchmark>] - <1m|5m|15m|30m|1hr>")
                 print("  c ...")
                 print("  cc ...")
                 print("\nExamples:")
@@ -3230,10 +3248,10 @@ def _run_repl(
                 return True
             if normalized_topic in {"table"}:
                 print("\nTable Commands:")
-                print("  table swing [<code>] [<period>]")
-                print("  table swing [<code>] - <period> [agg]")
-                print("  table intra [<code>] [<1m|5m|15m|30m|1hr>]")
-                print("  table intra [<code>] - <period> [agg]")
+                print("  table swing [<benchmark>] [<period>]")
+                print("  table swing [<benchmark>] - <period> [agg]")
+                print("  table intra [<benchmark>] [<1m|5m|15m|30m|1hr>]")
+                print("  table intra [<benchmark>] - <1m|5m|15m|30m|1hr>")
                 print("  t ...")
                 print("  tt ...")
                 print("\nExamples:")
@@ -3567,8 +3585,11 @@ def _run_repl(
             _print_command_help(
                 command="chart swing",
                 aliases=["c"],
-                usage_lines=["chart swing [<code>] [<period>]", "chart swing [<code>] - <period> [agg]"],
-                detail_lines=["Render swing chart with period and optional aggregation override."],
+                usage_lines=["chart swing [<benchmark>] [<period>]", "chart swing [<benchmark>] - <period> [agg]"],
+                detail_lines=[
+                    "Render swing chart with period and optional aggregation (bin size) override.",
+                    "Active symbol stays unchanged; first positional token overrides benchmark.",
+                ],
                 default_lines=["period: 6mo", "aggregation: auto (from period)", "symbol: current active symbol"],
                 example_lines=["chart swing nifty 3mo", "c nifty - 2y mo", "c 1y"],
             )
@@ -3577,18 +3598,27 @@ def _run_repl(
             _print_command_help(
                 command="chart intra",
                 aliases=["cc"],
-                usage_lines=["chart intra [<code>] [<1m|5m|15m|30m|1hr>]"],
-                detail_lines=["Render intraday chart with minute interval."],
+                usage_lines=[
+                    "chart intra [<benchmark>] [<1m|5m|15m|30m|1hr>]",
+                    "chart intra [<benchmark>] - <1m|5m|15m|30m|1hr>",
+                ],
+                detail_lines=[
+                    "Render intraday chart with bin-size interval.",
+                    "Active symbol stays unchanged; first positional token overrides benchmark.",
+                ],
                 default_lines=["interval: 5m", "symbol: current active symbol"],
-                example_lines=["chart intra banknifty 5m", "cc 1m", "cc nifty 1hr"],
+                example_lines=["chart intra banknifty 5m", "cc - 15m", "cc nifty - 1hr"],
             )
             return
         if canonical == "c":
             _print_command_help(
                 command="c",
                 aliases=["chart swing"],
-                usage_lines=["c [<code>] [<period>]", "c [<code>] - <period> [agg]"],
-                detail_lines=["Short alias for swing chart command family."],
+                usage_lines=["c [<benchmark>] [<period>]", "c [<benchmark>] - <period> [agg]"],
+                detail_lines=[
+                    "Short alias for swing chart command family.",
+                    "Active symbol stays unchanged; first positional token overrides benchmark.",
+                ],
                 default_lines=["period: 6mo", "aggregation: auto (from period)", "symbol: current active symbol"],
                 example_lines=["c", "c 2y", "c nifty - 2y mo"],
             )
@@ -3597,10 +3627,13 @@ def _run_repl(
             _print_command_help(
                 command="cc",
                 aliases=["chart intra"],
-                usage_lines=["cc [<code>] [<1m|5m|15m|30m|1hr>]"],
-                detail_lines=["Short alias for intraday chart command family."],
+                usage_lines=["cc [<benchmark>] [<1m|5m|15m|30m|1hr>]", "cc [<benchmark>] - <1m|5m|15m|30m|1hr>"],
+                detail_lines=[
+                    "Short alias for intraday chart command family.",
+                    "Active symbol stays unchanged; first positional token overrides benchmark.",
+                ],
                 default_lines=["interval: 5m", "symbol: current active symbol"],
-                example_lines=["cc", "cc 30m", "cc nifty 1hr"],
+                example_lines=["cc", "cc - 15m", "cc nifty - 1hr"],
             )
             return
         if canonical == "table":
@@ -3616,8 +3649,11 @@ def _run_repl(
             _print_command_help(
                 command="table swing",
                 aliases=["t"],
-                usage_lines=["table swing [<code>] [<period>]", "table swing [<code>] - <period> [agg]"],
-                detail_lines=["Render swing rebased stock-vs-benchmark table."],
+                usage_lines=["table swing [<benchmark>] [<period>]", "table swing [<benchmark>] - <period> [agg]"],
+                detail_lines=[
+                    "Render swing rebased stock-vs-benchmark table.",
+                    "Active symbol stays unchanged; first positional token overrides benchmark.",
+                ],
                 default_lines=["period: 6mo", "aggregation: auto (from period)", "symbol: current active symbol"],
                 example_lines=["table swing", "table swing nifty - 2y mo", "t nifty 1y"],
             )
@@ -3626,18 +3662,27 @@ def _run_repl(
             _print_command_help(
                 command="table intra",
                 aliases=["tt"],
-                usage_lines=["table intra [<code>] [<1m|5m|15m|30m|1hr>]", "table intra [<code>] - <period> [agg]"],
-                detail_lines=["Render intraday-first rebased table with minute interval controls."],
+                usage_lines=[
+                    "table intra [<benchmark>] [<1m|5m|15m|30m|1hr>]",
+                    "table intra [<benchmark>] - <1m|5m|15m|30m|1hr>",
+                ],
+                detail_lines=[
+                    "Render intraday rebased table with bin-size interval controls.",
+                    "Active symbol stays unchanged; first positional token overrides benchmark.",
+                ],
                 default_lines=["interval: 5m", "symbol: current active symbol"],
-                example_lines=["table intra nifty 1hr", "tt 30m", "tt - 2y mo"],
+                example_lines=["table intra nifty 1hr", "tt - 15m", "tt nifty - 30m"],
             )
             return
         if canonical == "t":
             _print_command_help(
                 command="t",
                 aliases=["table swing"],
-                usage_lines=["t [<code>] [<period>]", "t [<code>] - <period> [agg]"],
-                detail_lines=["Short alias for swing table command family."],
+                usage_lines=["t [<benchmark>] [<period>]", "t [<benchmark>] - <period> [agg]"],
+                detail_lines=[
+                    "Short alias for swing table command family.",
+                    "Active symbol stays unchanged; first positional token overrides benchmark.",
+                ],
                 default_lines=["period: 6mo", "aggregation: auto (from period)", "symbol: current active symbol"],
                 example_lines=["t", "t nifty", "t nifty - 2y mo"],
             )
@@ -3646,10 +3691,13 @@ def _run_repl(
             _print_command_help(
                 command="tt",
                 aliases=["table intra"],
-                usage_lines=["tt [<code>] [<1m|5m|15m|30m|1hr>]", "tt [<code>] - <period> [agg]"],
-                detail_lines=["Short alias for intraday-first table command family."],
+                usage_lines=["tt [<benchmark>] [<1m|5m|15m|30m|1hr>]", "tt [<benchmark>] - <1m|5m|15m|30m|1hr>"],
+                detail_lines=[
+                    "Short alias for intraday table command family.",
+                    "Active symbol stays unchanged; first positional token overrides benchmark.",
+                ],
                 default_lines=["interval: 5m", "symbol: current active symbol"],
-                example_lines=["tt", "tt 1hr", "tt nifty - 2y mo"],
+                example_lines=["tt", "tt - 15m", "tt nifty - 1hr"],
             )
             return
         if canonical == "watchlist":
@@ -4179,61 +4227,14 @@ def _run_repl(
                 continue
 
             args = cmd.split()[1:]
-            period_token: str
-            interval_override: str | None
-            benchmark_input: str | None
-
-            if len(args) == 0:
-                # Default tt mode mirrors cc defaults but renders table-only output.
-                parsed_intraday, parse_error = _parse_intraday_command_args(args)
-                if parse_error:
-                    print(parse_error, file=sys.stderr)
-                    continue
-                assert parsed_intraday is not None
-                period_token = "1d"
-                interval_override = parsed_intraday.interval
-                benchmark_input = parsed_intraday.benchmark_input
-            elif args[0] == "-" or (len(args) >= 2 and args[1] == "-"):
-                # Explicit preserved-structure syntax always goes through swing parser.
-                parsed_swing, parse_error = _parse_swing_command_args(args, command_name="tt")
-                if parse_error:
-                    print(parse_error, file=sys.stderr)
-                    continue
-                assert parsed_swing is not None
-                period_token = parsed_swing.period_token
-                interval_override = parsed_swing.interval_override
-                benchmark_input = parsed_swing.benchmark_input
-            elif len(args) == 1:
-                # tt is intraday-first: one token means interval or benchmark symbol.
-                parsed_intraday, parse_error = _parse_intraday_command_args(args)
-                if parse_error:
-                    print(parse_error, file=sys.stderr)
-                    continue
-                assert parsed_intraday is not None
-                period_token = "1d"
-                interval_override = parsed_intraday.interval
-                benchmark_input = parsed_intraday.benchmark_input
-            elif len(args) == 2:
-                # Two-token tt form is intraday benchmark + minute interval.
-                parsed_intraday, parse_error = _parse_intraday_command_args(args)
-                if parse_error:
-                    print(
-                        "Usage: tt | tt <1m|5m|15m|30m|1hr> | tt <code> | tt <code> <1m|5m|15m|30m|1hr> "
-                        "| tt - <period> [agg] | tt <code> - <period> [agg]",
-                        file=sys.stderr,
-                    )
-                    continue
-                assert parsed_intraday is not None
-                period_token = "1d"
-                interval_override = parsed_intraday.interval
-                benchmark_input = parsed_intraday.benchmark_input
-            else:
-                print(
-                    "Usage: tt | tt <1m|5m|15m|30m|1hr> | tt <code> | tt <code> <1m|5m|15m|30m|1hr> "
-                    "| tt - <period> [agg] | tt <code> - <period> [agg]",
-                    file=sys.stderr,
-                )
+            parsed_intraday, parse_error = _parse_intraday_command_args(args, command_name="tt")
+            if parse_error:
+                print(parse_error, file=sys.stderr)
                 continue
+            assert parsed_intraday is not None
+            period_token = "1d"
+            interval_override = parsed_intraday.interval
+            benchmark_input = parsed_intraday.benchmark_input
 
             bench_symbol, bench_label, bench_error = _resolve_benchmark_for_table(
                 active_symbol=current_symbol,
