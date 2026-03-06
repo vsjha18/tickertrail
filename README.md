@@ -314,7 +314,7 @@ Final Relative (Stock - Bench): -0.07
 Final Alpha% (Stock vs Bench): -0.07%
 ```
 
-Intraday tables are unsampled: if `bin=5m`, each row advances by 5 minutes.
+Tables are unsampled: row spacing always matches the header bin (for example `bin=5m` means 5-minute rows, `bin=1wk` means weekly rows).
 
 ### Multi-Symbol Compare (`cmp`)
 

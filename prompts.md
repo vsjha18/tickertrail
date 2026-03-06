@@ -343,7 +343,7 @@ Implement table-only mode (`t`) output:
 - final relative line at bottom
 - final Alpha% line at bottom
 - colorize numbers by sign (delta)
-- keep intraday table rows unsampled so row spacing always matches the header bin (for example `bin=5m` means each row is 5 minutes apart)
+- keep table rows unsampled so row spacing always matches the header bin (for example `bin=5m` means 5-minute rows, `bin=1wk` means weekly rows)
 
 Rules:
 - no chart in `t` mode

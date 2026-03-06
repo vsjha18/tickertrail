@@ -105,13 +105,8 @@ def print_rebased_table_output(
 
     stock_100 = [100.0 * p / stock_values[0] for p in stock_values]
     bench_100 = [100.0 * p / bench_values[0] for p in bench_values]
-    intraday_intervals = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
-    # Keep intraday and monthly tables unsampled so displayed row spacing always
-    # matches the bin shown in the header.
-    if interval == "1mo" or interval in intraday_intervals:
-        row_indices = list(range(len(dates)))
-    else:
-        row_indices = checkpoint_indices_fn(len(dates), 6)
+    # Keep table rows unsampled so displayed spacing always matches the header bin.
+    row_indices = list(range(len(dates)))
     print(f"\nRebased Co-Plot (base=100): {symbol.upper()} vs {benchmark_label} [period={period_token}, bin={interval}]")
     print(f"Date Range: {dates[0]} -> {dates[-1]}")
     print(f"{'Date':<10} {'Stock':>9} {'Bench':>9} {'Delta':>9} {'Alpha%':>9}")
@@ -150,13 +145,8 @@ def print_compare_table_output(
 
     symbol_width = max(9, min(16, max(len(symbol) for symbol in resolved_symbols)))
     header = [f"{'Date':<10}", *[f"{symbol:>{symbol_width}}" for symbol in resolved_symbols]]
-    intraday_intervals = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
-    # Keep intraday and monthly tables unsampled so displayed row spacing always
-    # matches the bin shown in the header.
-    if interval == "1mo" or interval in intraday_intervals:
-        row_indices = list(range(len(dates)))
-    else:
-        row_indices = checkpoint_indices_fn(len(dates), 6)
+    # Keep table rows unsampled so displayed spacing always matches the header bin.
+    row_indices = list(range(len(dates)))
     print(f"\nCompare (base=100): {', '.join(resolved_symbols)} [period={period_token}, bin={interval}]")
     print(f"Date Range: {dates[0]} -> {dates[-1]}")
     print(" ".join(header))
