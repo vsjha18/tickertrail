@@ -343,7 +343,7 @@ Implement table-only mode (`t`) output:
 - final relative line at bottom
 - final Alpha% line at bottom
 - colorize numbers by sign (delta)
-- for long intraday tables, keep base-bin fetch but sample display rows; header bin must state this clearly (for example `bin=5m (shown every 2 bars)`) and print a sampling note
+- keep intraday table rows unsampled so row spacing always matches the header bin (for example `bin=5m` means each row is 5 minutes apart)
 
 Rules:
 - no chart in `t` mode
