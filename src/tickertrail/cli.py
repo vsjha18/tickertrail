@@ -2198,6 +2198,25 @@ def _draw_chart(
     benchmark_override: str | None = None,
 ) -> int:
     """Render the main coaxial chart plus rebased benchmark summary table."""
+    def _today_change_from_info(quote_info: dict[str, Any] | None) -> float | None:
+        """Return today's absolute change from quote payload when available."""
+        if not isinstance(quote_info, dict):
+            return None
+        direct = quote_info.get("regularMarketChange")
+        try:
+            if direct is not None:
+                return float(direct)
+        except (TypeError, ValueError):
+            pass
+        price = quote_info.get("regularMarketPrice")
+        prev_close = quote_info.get("regularMarketPreviousClose")
+        try:
+            if price is not None and prev_close is not None:
+                return float(price) - float(prev_close)
+        except (TypeError, ValueError):
+            return None
+        return None
+
     interval_error = _validate_period_interval(period, interval)
     if interval_error:
         print(interval_error, file=sys.stderr)
@@ -2330,7 +2349,10 @@ def _draw_chart(
     if wk52_low_f is not None and wk52_high_f is not None and wk52_high_f > wk52_low_f:
         wk52_bar = _colorize(_range_line(wk52_low_f, wk52_high_f, last_price, width=max(24, min(50, width // 2))), "yellow")
         print(f"52W Range  {wk52_bar}  {wk52_low_f:,.2f} .. {wk52_high_f:,.2f}")
-    print(f"Last: {last_price:,.2f}")
+    today_change = _today_change_from_info(info)
+    last_color = _color_by_sign(today_change) if today_change is not None else "cyan"
+    last_txt = _colorize(f"{last_price:,.2f}", last_color)
+    print(f"Last: {last_txt}")
     print(f"Move: {move_txt} | From: {core_dates[0]} -> {core_dates[-1]}")
     if benchmark_dates and benchmark_prices and benchmark_label:
         print(f"Benchmark: {benchmark_label} ({benchmark_symbol}) rebased to start value")

@@ -626,6 +626,55 @@ class RenderBehaviorTests(unittest.TestCase):
         self.assertIn("52W Range", txt)
         self.assertNotIn("52W Line:", txt)
 
+    @patch("tickertrail.cli.plt")
+    @patch("tickertrail.cli._benchmark_symbol_for", return_value=(None, None))
+    @patch("tickertrail.cli._fetch_close_points_for_token")
+    @patch("tickertrail.cli._colorize")
+    def test_draw_chart_last_color_uses_today_change_from_info(self, mock_colorize, mock_fetch, _mock_bench, _mock_plt):
+        t0 = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+        t1 = dt.datetime(2026, 2, 1, tzinfo=dt.timezone.utc)
+        mock_fetch.return_value = ([t0, t1], [100.0, 120.0])
+        mock_colorize.side_effect = lambda text, color: f"<{color}>{text}</{color}>"
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._draw_chart(
+                "BEL.NS",
+                "1y",
+                "1mo",
+                20,
+                100,
+                info={"regularMarketChange": -2.5, "regularMarketPrice": 120.0, "regularMarketPreviousClose": 122.5},
+            )
+        self.assertEqual(rc, 0)
+        self.assertIn("Last: <red>", out.getvalue())
+
+    @patch("tickertrail.cli.plt")
+    @patch("tickertrail.cli._fetch_close_points_for_token")
+    @patch("tickertrail.cli._get_quote_payload")
+    @patch("tickertrail.cli._colorize")
+    def test_draw_chart_last_color_fallback_and_benchmark_override(self, mock_colorize, mock_get_quote, mock_fetch, _mock_plt):
+        t0 = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+        t1 = dt.datetime(2026, 2, 1, tzinfo=dt.timezone.utc)
+        mock_fetch.side_effect = [
+            ([t0, t1], [100.0, 120.0]),
+            ([t0, t1], [200.0, 210.0]),
+        ]
+        mock_get_quote.return_value = {"shortName": "NIFTY 50"}
+        mock_colorize.side_effect = lambda text, color: f"<{color}>{text}</{color}>"
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._draw_chart(
+                "BEL.NS",
+                "1y",
+                "1mo",
+                20,
+                100,
+                info={"regularMarketChange": "bad", "regularMarketPrice": 120.0, "regularMarketPreviousClose": 118.0},
+                benchmark_override="^NSEI",
+            )
+        self.assertEqual(rc, 0)
+        txt = out.getvalue()
+        self.assertIn("Last: <green>", txt)
+        self.assertIn("Benchmark: NIFTY 50 (^NSEI)", txt)
+
     @patch("tickertrail.cli._fetch_close_points_for_token")
     def test_render_rebased_table_success_and_error(self, mock_fetch):
         t0 = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
