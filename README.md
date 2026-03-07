@@ -130,7 +130,7 @@ Many commands are context-sensitive. You usually do not need arguments.
 ### Chart/table defaults
 
 - `c` default period: `6mo` (default interval auto-selected from period)
-- `t` default period: `6mo` (default interval auto-selected from period)
+- `t` default period: `6mo` (default bin auto-selected from period: `<=7d -> 1d`, `<=1mo -> 1wk`, above that -> `1mo`)
 - `cc` default interval: `5m`
 - `tt` default interval: `5m`
 - `cmp` default period: `6mo` (with auto interval)

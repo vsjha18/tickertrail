@@ -218,6 +218,10 @@ Expected behavior:
   - w -> 1wk
   - mo -> 1mo
   - and explicit yfinance intervals where valid
+- default table-bin policy:
+  - `<=7d -> 1d`
+  - `<=1mo -> 1wk`
+  - above `1mo -> 1mo`
 ```
 
 ## 5) Period/Interval Validator Prompt

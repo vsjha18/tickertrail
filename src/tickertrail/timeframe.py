@@ -102,12 +102,12 @@ def table_interval_for_period_token(period_token: str) -> str:
     days = period_token_days(period_token)
     if days is None:
         return "1d"
-    if days <= 1:
-        return "5m"
-    # Table mode favors readable period buckets; 2y should be monthly (24 rows).
-    if days >= 365:
-        return "1mo"
-    return "1d"
+    # Table mode favors slower summary bins by default.
+    if days <= 7:
+        return "1d"
+    if days <= 31:
+        return "1wk"
+    return "1mo"
 
 
 def interval_for_chart_period(period_token: str) -> str:

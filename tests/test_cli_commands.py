@@ -485,6 +485,10 @@ class HelperBehaviorTests(unittest.TestCase):
         self.assertEqual((lo, hi), (9.5, 11.5))
 
     def test_table_and_chart_interval_policy(self):
+        self.assertEqual(cli._table_interval_for_period_token("1w"), "1d")
+        self.assertEqual(cli._table_interval_for_period_token("1mo"), "1wk")
+        self.assertEqual(cli._table_interval_for_period_token("6mo"), "1mo")
+        self.assertEqual(cli._table_interval_for_period_token("1y"), "1mo")
         self.assertEqual(cli._table_interval_for_period_token("2y"), "1mo")
         self.assertEqual(cli._interval_for_chart_period("2y"), "1wk")
         self.assertIsNotNone(cli._validate_period_interval("3m", "1d"))
