@@ -1343,12 +1343,14 @@ class BranchHelperTests(unittest.TestCase):
         self.assertIsNone(symbol_named_bad_error)
 
     def test_period_interval_default_helpers_cover_non_standard_paths(self):
-        self.assertEqual(cli._table_interval_for_period_token("max"), "1mo")
+        self.assertEqual(cli._table_interval_for_period_token("max"), "1y")
         self.assertEqual(cli._table_interval_for_period_token("bad"), "1d")
         self.assertEqual(cli._table_interval_for_period_token("1d"), "1d")
         self.assertEqual(cli._table_interval_for_period_token("1w"), "1d")
         self.assertEqual(cli._table_interval_for_period_token("1mo"), "1wk")
         self.assertEqual(cli._table_interval_for_period_token("6mo"), "1mo")
+        self.assertEqual(cli._table_interval_for_period_token("3y"), "1mo")
+        self.assertEqual(cli._table_interval_for_period_token("5y"), "1y")
         self.assertEqual(cli._interval_for_chart_period("max"), "1mo")
         self.assertEqual(cli._interval_for_chart_period("bad"), "1d")
         self.assertEqual(cli._interval_for_chart_period("3y"), "1mo")

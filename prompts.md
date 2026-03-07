@@ -221,7 +221,8 @@ Expected behavior:
 - default table-bin policy:
   - `<=7d -> 1d`
   - `<=1mo -> 1wk`
-  - above `1mo -> 1mo`
+  - `>1mo and <=3y -> 1mo`
+  - `>3y -> 1y`
 ```
 
 ## 5) Period/Interval Validator Prompt

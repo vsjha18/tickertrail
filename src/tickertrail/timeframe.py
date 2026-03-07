@@ -98,7 +98,7 @@ def table_interval_for_period_token(period_token: str) -> str:
     """Pick default table aggregation interval from period token length."""
     token = normalize_period_token(period_token)
     if token == "max":
-        return "1mo"
+        return "1y"
     days = period_token_days(period_token)
     if days is None:
         return "1d"
@@ -107,7 +107,9 @@ def table_interval_for_period_token(period_token: str) -> str:
         return "1d"
     if days <= 31:
         return "1wk"
-    return "1mo"
+    if days <= 1095:
+        return "1mo"
+    return "1y"
 
 
 def interval_for_chart_period(period_token: str) -> str:
