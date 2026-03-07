@@ -339,7 +339,6 @@ Final           118.48      126.02      122.63
 - `cache`: show today's history cache summary
 - `cache clear`: clear today's history cache
 - `reload` / `r`: refresh quote and replay last chart/table
-- `cd ..`: return to previous index/watchlist context
 - `cls` / `clear`: clear terminal
 - `quit` / `exit`: leave REPL
 - `!<shell-cmd>`: run shell command

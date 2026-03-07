@@ -3121,7 +3121,6 @@ def _run_repl(
     current_symbol = start_resolved_symbol
     current_info = start_info
     active_watchlist: str | None = None
-    mode_return_target: tuple[str, str, dict[str, Any] | None] | None = None
     last_view_kind = "quote" if current_symbol else None
     last_view_args: dict[str, Any] = {}
 
@@ -3182,7 +3181,6 @@ def _run_repl(
             print("  quit | exit                 Exit")
             print("  cls | clear                 Clear terminal")
             print("  reload | r                  Refresh quote + replay last chart/table")
-            print("  cd ..                       Return to last index/watchlist mode")
             print("  !<shell-cmd>                Run shell command")
             print("  cache                       Show today's persisted history cache summary")
             print("  cache clear                 Clear today's persisted history cache")
@@ -3238,7 +3236,6 @@ def _run_repl(
                 print("  quit | exit")
                 print("  cls | clear")
                 print("  reload | r")
-                print("  cd ..")
                 print("  !<shell-cmd>")
                 print("  cache")
                 print("  cache clear")
@@ -3875,30 +3872,7 @@ def _run_repl(
             _print_network_call_metrics()
             return 0
         if lower == "cd ..":
-            # Lightweight mode-navigation return: restores previous mode without symbol re-resolution.
-            if mode_return_target is None:
-                print("No previous index/watchlist mode to return to.", file=sys.stderr)
-                continue
-            target_kind, target_value, target_info = mode_return_target
-            if target_kind == "watchlist":
-                if _watchlist_symbols(target_value) is None:
-                    print(f"Watchlist '{target_value}' not found.", file=sys.stderr)
-                    continue
-                active_watchlist = target_value
-                print(f"Returned to watchlist mode '{target_value}'.")
-                continue
-            if target_kind == "index":
-                current_symbol = target_value
-                current_info = target_info
-                active_watchlist = None
-                if isinstance(current_info, dict) and _has_quote_data(current_info):
-                    _print_quote(current_symbol, current_symbol, include_after_hours=True, preloaded_info=current_info)
-                else:
-                    print(f"Returned to index mode '{current_symbol}'. Use `quote` to refresh quote.")
-                last_view_kind = "quote"
-                last_view_args = {}
-                continue
-            print("No previous index/watchlist mode to return to.", file=sys.stderr)
+            print("Unknown command 'cd ..'.", file=sys.stderr)
             continue
         if lower in {"quote", "q"} or lower.startswith("quote "):
             if lower.startswith("quote ") or (lower.startswith("q ") and lower != "q"):
@@ -4458,10 +4432,6 @@ def _run_repl(
                 continue
 
         resolved_symbol, preloaded_info = _resolve_symbol_with_fallback(cmd)
-        if active_watchlist is not None:
-            mode_return_target = ("watchlist", active_watchlist, None)
-        elif current_symbol and _is_index_context_symbol(current_symbol) and not _is_index_context_symbol(resolved_symbol):
-            mode_return_target = ("index", _normalize_snap_index_symbol(current_symbol), current_info)
         # Keep index quote behavior consistent outside index-mode alias branch.
         if preloaded_info is None and _is_known_index_symbol(resolved_symbol):
             preloaded_info = _index_quote_fallback_payload(resolved_symbol)

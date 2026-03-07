@@ -29,7 +29,6 @@ Core commands:
 - `cache`: print today's persisted history-cache summary (path, counts, symbols, dimensions).
 - `cache clear`: clear only today's persisted history cache bucket.
 - `reload` / `r`: refresh active quote and replay last chart/table view.
-- `cd ..`: return to the last exited index/watchlist mode without symbol re-resolution.
 - `index`: live market board with India + Global sections.
 - `index list`: curated index universe (symbol catalog) without live fetch.
 - `news <code>`: resolve symbol and print latest Yahoo Finance headlines (best-effort availability per ticker/region).
@@ -47,7 +46,6 @@ Core commands:
 - `watchlist`: exit watchlist mode.
 - bare `wl`: alias for `wl list`.
 - while in watchlist mode, typing a symbol switches to stock quote mode and exits watchlist mode.
-- after leaving index/watchlist mode via symbol switch, `cd ..` returns to that last mode context with no symbol re-resolution.
 - `add <code...>`: add validated stock codes in active watchlist mode.
   - when a symbol already exists in the active watchlist, print an explicit "already exists" message.
   - validate using local NSE universe data only (no network fetches while adding).

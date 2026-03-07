@@ -2296,7 +2296,7 @@ class BranchRenderAndReplTests(unittest.TestCase):
     @patch("tickertrail.cli._resolve_symbol_with_fallback", return_value=("BEL.NS", {"regularMarketPrice": 1.0, "regularMarketPreviousClose": 1.0}))
     @patch("tickertrail.cli._watchlist_symbols", return_value=["INFY.NS"])
     @patch("tickertrail.cli._add_symbols_to_watchlist", return_value=(0, ["TCS.NS"], [], []))
-    def test_run_repl_cd_dotdot_restores_watchlist_mode(
+    def test_run_repl_cd_dotdot_is_rejected_as_unknown_command(
         self,
         mock_add,
         _mock_watch_symbols,
@@ -2304,58 +2304,15 @@ class BranchRenderAndReplTests(unittest.TestCase):
         _mock_quote,
         _mock_hist,
     ):
-        with patch("builtins.input", side_effect=["watchlist open swing", "bel", "cd ..", "add tcs", "exit"]):
-            rc = cli._run_repl(None, None, None, 80, 20)
-        self.assertEqual(rc, 0)
-        self.assertEqual(mock_resolve_symbol.call_count, 1)
-        self.assertEqual(mock_add.call_count, 1)
-
-    @patch("tickertrail.cli._enable_repl_history", return_value=None)
-    @patch("tickertrail.cli._print_quote", return_value=0)
-    @patch("tickertrail.cli._resolve_symbol_with_fallback", return_value=("BEL.NS", {"regularMarketPrice": 1.0, "regularMarketPreviousClose": 1.0}))
-    def test_run_repl_cd_dotdot_restores_index_mode(self, mock_resolve_symbol, mock_quote, _mock_hist):
-        with patch("builtins.input", side_effect=["bel", "cd ..", "exit"]):
-            rc = cli._run_repl("CNXIT", "^CNXIT", {"regularMarketPrice": 2.0, "regularMarketPreviousClose": 2.0}, 80, 20)
-        self.assertEqual(rc, 0)
-        self.assertEqual(mock_resolve_symbol.call_count, 1)
-        self.assertGreaterEqual(mock_quote.call_count, 3)
-
-    @patch("tickertrail.cli._enable_repl_history", return_value=None)
-    def test_run_repl_cd_dotdot_without_target(self, _mock_hist):
         with (
-            patch("builtins.input", side_effect=["cd ..", "exit"]),
-            patch("sys.stderr", new_callable=io.StringIO) as err,
-        ):
-            rc = cli._run_repl(None, None, None, 80, 20)
-        self.assertEqual(rc, 0)
-        self.assertIn("No previous index/watchlist mode", err.getvalue())
-
-    @patch("tickertrail.cli._enable_repl_history", return_value=None)
-    @patch("tickertrail.cli._print_quote", return_value=0)
-    @patch("tickertrail.cli._resolve_symbol_with_fallback", return_value=("BEL.NS", {"regularMarketPrice": 1.0, "regularMarketPreviousClose": 1.0}))
-    def test_run_repl_cd_dotdot_watchlist_missing_on_restore(self, mock_resolve_symbol, _mock_quote, _mock_hist):
-        with (
-            patch("tickertrail.cli._watchlist_symbols", side_effect=[["INFY.NS"], None]),
-            patch("builtins.input", side_effect=["watchlist open swing", "bel", "cd ..", "exit"]),
+            patch("builtins.input", side_effect=["watchlist open swing", "bel", "cd ..", "add tcs", "exit"]),
             patch("sys.stderr", new_callable=io.StringIO) as err,
         ):
             rc = cli._run_repl(None, None, None, 80, 20)
         self.assertEqual(rc, 0)
         self.assertEqual(mock_resolve_symbol.call_count, 1)
-        self.assertIn("Watchlist 'swing' not found.", err.getvalue())
-
-    @patch("tickertrail.cli._enable_repl_history", return_value=None)
-    @patch("tickertrail.cli._print_quote", return_value=0)
-    @patch("tickertrail.cli._resolve_symbol_with_fallback", return_value=("BEL.NS", {"regularMarketPrice": 1.0, "regularMarketPreviousClose": 1.0}))
-    @patch("tickertrail.cli._has_quote_data", return_value=False)
-    def test_run_repl_cd_dotdot_index_restore_without_cached_quote(self, _mock_has, _mock_resolve_symbol, _mock_quote, _mock_hist):
-        with (
-            patch("builtins.input", side_effect=["bel", "cd ..", "exit"]),
-            patch("sys.stdout", new_callable=io.StringIO) as out,
-        ):
-            rc = cli._run_repl("CNXIT", "^CNXIT", {}, 80, 20)
-        self.assertEqual(rc, 0)
-        self.assertIn("Use `quote` to refresh quote", out.getvalue())
+        self.assertEqual(mock_add.call_count, 0)
+        self.assertIn("Unknown command 'cd ..'.", err.getvalue())
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     def test_run_repl_quote_usage_and_no_active_symbol_errors(self, _mock_hist):
