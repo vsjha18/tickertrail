@@ -45,6 +45,7 @@ Core commands:
 - `watchlist <name>` / `wl <name>`: shorthand for `watchlist open <name>`.
 - `watchlist`: exit watchlist mode.
 - bare `wl`: alias for `wl list`.
+- if watchlist DB reads fail transiently, surface a DB read error explicitly; do not misreport the watchlist as missing.
 - while in watchlist mode, typing a symbol switches to stock quote mode and exits watchlist mode.
 - `add <code...>`: add validated stock codes in active watchlist mode.
   - when a symbol already exists in the active watchlist, print an explicit "already exists" message.

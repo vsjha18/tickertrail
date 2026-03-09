@@ -1,5 +1,6 @@
 import datetime as dt
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -371,11 +372,133 @@ class HelperBehaviorTests(unittest.TestCase):
             finally:
                 cli._WATCHLIST_DB_JSON = old_db
 
+    def test_load_watchlists_result_retries_after_transient_json_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "db.json"
+            old_db = cli._WATCHLIST_DB_JSON
+            try:
+                cli._WATCHLIST_DB_JSON = db_path
+                with patch(
+                    "pathlib.Path.open",
+                    side_effect=[
+                        io.StringIO('{"watchlists":'),
+                        io.StringIO('{"watchlists":{"sharekhan":["BEL.NS"]}}'),
+                    ],
+                ):
+                    watchlists, error = cli._load_watchlists_result()
+                self.assertEqual(watchlists, {"sharekhan": ["BEL.NS"]})
+                self.assertIsNone(error)
+            finally:
+                cli._WATCHLIST_DB_JSON = old_db
+
+    def test_load_watchlists_result_surfaces_read_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "db.json"
+            old_db = cli._WATCHLIST_DB_JSON
+            try:
+                cli._WATCHLIST_DB_JSON = db_path
+                with patch("pathlib.Path.open", side_effect=OSError("busy")):
+                    watchlists, error = cli._load_watchlists_result()
+                self.assertIsNone(watchlists)
+                self.assertIn("Could not read watchlists database", str(error))
+            finally:
+                cli._WATCHLIST_DB_JSON = old_db
+
+    def test_watchlist_payload_normalization_covers_invalid_shapes(self):
+        self.assertEqual(cli._normalize_watchlists_payload([]), {})
+        self.assertEqual(cli._normalize_watchlists_payload({"watchlists": []}), {})
+        self.assertEqual(
+            cli._normalize_watchlists_payload(
+                {
+                    "watchlists": {
+                        " core ": [" bel.ns ", 7, "BEL.NS", ""],
+                        "": ["IGNORED.NS"],
+                        9: ["BAD.NS"],
+                        "bad": "not-a-list",
+                    }
+                }
+            ),
+            {"core": ["BEL.NS"]},
+        )
+
+    def test_load_watchlists_result_returns_empty_when_db_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "db.json"
+            old_db = cli._WATCHLIST_DB_JSON
+            try:
+                cli._WATCHLIST_DB_JSON = db_path
+                watchlists, error = cli._load_watchlists_result()
+                self.assertEqual(watchlists, {})
+                self.assertIsNone(error)
+            finally:
+                cli._WATCHLIST_DB_JSON = old_db
+
+    def test_watchlist_result_helpers_cover_not_found_and_error_paths(self):
+        with patch("tickertrail.cli._load_watchlists_result", return_value=(None, "Could not read watchlists database: OSError.")):
+            symbols, symbols_error = cli._watchlist_symbols_result("sharekhan")
+            names, names_error = cli._list_watchlists_result()
+        self.assertIsNone(symbols)
+        self.assertEqual(symbols_error, "Could not read watchlists database: OSError.")
+        self.assertIsNone(names)
+        self.assertEqual(names_error, "Could not read watchlists database: OSError.")
+
+        with patch("tickertrail.cli._load_watchlists_result", return_value=({"core": ["BEL.NS"]}, None)):
+            symbols, symbols_error = cli._watchlist_symbols_result("missing")
+        self.assertIsNone(symbols)
+        self.assertEqual(symbols_error, "Watchlist 'missing' not found.")
+
+    def test_save_watchlists_writes_atomically(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "db.json"
+            old_db = cli._WATCHLIST_DB_JSON
+            try:
+                cli._WATCHLIST_DB_JSON = db_path
+                cli._save_watchlists({"sharekhan": ["BEL.NS", "INFY.NS"]})
+                self.assertTrue(db_path.exists())
+                self.assertFalse(db_path.with_name("db.json.tmp").exists())
+                payload = json.loads(db_path.read_text(encoding="utf-8"))
+                self.assertEqual(payload, {"watchlists": {"sharekhan": ["BEL.NS", "INFY.NS"]}})
+            finally:
+                cli._WATCHLIST_DB_JSON = old_db
+
+    def test_watchlist_mutators_surface_db_read_errors(self):
+        error = "Could not read watchlists database: OSError."
+        with patch("tickertrail.cli._load_watchlists_result", return_value=(None, error)):
+            self.assertEqual(cli._create_watchlist("core"), (3, error))
+            self.assertEqual(cli._delete_watchlist("core"), (3, error))
+            self.assertEqual(cli._merge_watchlists("core", "growth", "combo"), (3, error))
+            self.assertEqual(cli._add_symbols_to_watchlist("core", ["BEL"]), (3, [], ["BEL"], []))
+            self.assertEqual(cli._remove_symbols_from_watchlist("core", ["BEL"]), (3, [], ["BEL"]))
+
+    def test_remove_symbols_from_watchlist_skips_blank_tokens(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "db.json"
+            old_db = cli._WATCHLIST_DB_JSON
+            try:
+                cli._WATCHLIST_DB_JSON = db_path
+                db_path.write_text('{"watchlists":{"core":["BEL.NS","INFY.NS"]}}', encoding="utf-8")
+                rc, removed, missing = cli._remove_symbols_from_watchlist("core", ["", "  ", "BEL"])
+                self.assertEqual(rc, 0)
+                self.assertEqual(removed, ["BEL.NS"])
+                self.assertEqual(missing, [])
+                self.assertEqual(cli._watchlist_symbols("core"), ["INFY.NS"])
+            finally:
+                cli._WATCHLIST_DB_JSON = old_db
+
     def test_print_watchlist_snapshot_paths(self):
-        with patch("tickertrail.cli._watchlist_symbols", return_value=None), patch("sys.stderr", new_callable=io.StringIO) as err:
+        with patch("tickertrail.cli._watchlist_symbols", return_value=None), patch("tickertrail.cli._watchlist_last_error", return_value=None), patch(
+            "sys.stderr", new_callable=io.StringIO
+        ) as err:
             rc = cli._print_watchlist_snapshot("x")
             self.assertEqual(rc, 3)
             self.assertIn("not found", err.getvalue().lower())
+
+        with patch("tickertrail.cli._watchlist_symbols", return_value=None), patch(
+            "tickertrail.cli._watchlist_last_error", return_value="Could not read watchlists database: JSONDecodeError."
+        ), patch("sys.stderr", new_callable=io.StringIO) as err:
+            rc = cli._print_watchlist_snapshot("x")
+            self.assertEqual(rc, 3)
+            self.assertIn("could not read watchlists database", err.getvalue().lower())
 
         with patch("tickertrail.cli._watchlist_symbols", return_value=[]), patch("sys.stderr", new_callable=io.StringIO) as err:
             rc = cli._print_watchlist_snapshot("x")

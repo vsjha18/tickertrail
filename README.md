@@ -383,6 +383,7 @@ Top-level:
 - `watchlist delete <name>`
 - `watchlist merge <wl1> <wl2> <target>`
 - `watchlist` (exit watchlist mode)
+- If the watchlist database cannot be read temporarily, the app reports a database read error instead of incorrectly saying the watchlist does not exist.
 
 Inside watchlist mode (`<name>>`):
 - `add <code...>`

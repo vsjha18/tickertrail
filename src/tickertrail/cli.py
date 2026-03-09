@@ -6,6 +6,7 @@ import datetime as dt
 import io
 import json
 import math
+import os
 import random
 import re
 import shutil
@@ -38,6 +39,8 @@ _INDEX_CONSTITUENTS_CSV = Path(__file__).resolve().parents[2] / "data" / "index_
 _WATCHLIST_DB_JSON = Path(__file__).resolve().parents[2] / "data" / "db.json"
 _HISTORY_FILE = Path(__file__).resolve().parents[2] / ".tickertrail_history"
 _CLI_CONF_JSON = Path(__file__).resolve().with_name("conf.json")
+_WATCHLIST_IO_RETRY_DELAY_SECONDS = 0.05
+_WATCHLIST_LAST_ERROR: str | None = None
 _INDEX_SYMBOL_FALLBACKS: dict[str, tuple[str, ...]] = {
     # Keep only empirically useful Yahoo alternates to minimize dead probes.
     "^CNXMIDCAP": ("NIFTY_MIDCAP_100.NS",),
@@ -329,11 +332,23 @@ class _ParsedCompareCommand:
 
 def _load_watchlists() -> dict[str, list[str]]:
     """Load watchlists from local JSON DB and normalize symbol arrays."""
-    try:
-        with _WATCHLIST_DB_JSON.open(encoding="utf-8") as f:
-            payload = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {}
+    watchlists, _error = _load_watchlists_result()
+    return watchlists or {}
+
+
+def _set_watchlist_last_error(error: str | None) -> None:
+    """Store the latest watchlist DB read error for caller-side reporting."""
+    global _WATCHLIST_LAST_ERROR
+    _WATCHLIST_LAST_ERROR = error
+
+
+def _watchlist_last_error() -> str | None:
+    """Return the latest watchlist DB read error, if any."""
+    return _WATCHLIST_LAST_ERROR
+
+
+def _normalize_watchlists_payload(payload: Any) -> dict[str, list[str]]:
+    """Normalize raw JSON payload into the in-memory watchlist structure."""
     if not isinstance(payload, dict):
         return {}
     raw_watchlists = payload.get("watchlists")
@@ -358,13 +373,54 @@ def _load_watchlists() -> dict[str, list[str]]:
     return watchlists
 
 
+def _load_watchlists_result() -> tuple[dict[str, list[str]] | None, str | None]:
+    """Load watchlists with one retry and return explicit read errors."""
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            with _WATCHLIST_DB_JSON.open(encoding="utf-8") as f:
+                payload = json.load(f)
+            return _normalize_watchlists_payload(payload), None
+        except FileNotFoundError:
+            return {}, None
+        except (OSError, json.JSONDecodeError) as exc:
+            last_error = exc
+            if attempt == 0:
+                time.sleep(_WATCHLIST_IO_RETRY_DELAY_SECONDS)
+                continue
+    assert last_error is not None
+    return None, f"Could not read watchlists database: {last_error.__class__.__name__}."
+
+
+def _watchlist_symbols_result(name: str) -> tuple[list[str] | None, str | None]:
+    """Return one watchlist symbol list plus explicit load/not-found status."""
+    watchlists, error = _load_watchlists_result()
+    if error is not None or watchlists is None:
+        return None, error
+    cleaned_name = name.strip()
+    if cleaned_name not in watchlists:
+        return None, f"Watchlist '{cleaned_name}' not found."
+    return watchlists[cleaned_name], None
+
+
+def _list_watchlists_result() -> tuple[list[str] | None, str | None]:
+    """Return sorted watchlist names plus explicit load status."""
+    watchlists, error = _load_watchlists_result()
+    if error is not None or watchlists is None:
+        return None, error
+    return sorted(watchlists.keys(), key=lambda item: item.lower()), None
+
 def _save_watchlists(watchlists: dict[str, list[str]]) -> None:
     """Persist watchlists to local JSON DB in `data/db.json`."""
     _WATCHLIST_DB_JSON.parent.mkdir(parents=True, exist_ok=True)
     payload = {"watchlists": watchlists}
-    with _WATCHLIST_DB_JSON.open("w", encoding="utf-8") as f:
+    tmp_path = _WATCHLIST_DB_JSON.with_name(f"{_WATCHLIST_DB_JSON.name}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=True, indent=2, sort_keys=True)
         f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, _WATCHLIST_DB_JSON)
 
 
 def _watchlist_name_valid(name: str) -> bool:
@@ -378,7 +434,9 @@ def _create_watchlist(name: str) -> tuple[int, str]:
     cleaned = name.strip()
     if not _watchlist_name_valid(cleaned):
         return 2, "Watchlist name must use letters, digits, '-', '_' or '.'."
-    watchlists = _load_watchlists()
+    watchlists, error = _load_watchlists_result()
+    if error is not None or watchlists is None:
+        return 3, error or "Could not read watchlists database."
     if cleaned in watchlists:
         return 2, f"Watchlist '{cleaned}' already exists."
     watchlists[cleaned] = []
@@ -389,7 +447,9 @@ def _create_watchlist(name: str) -> tuple[int, str]:
 def _delete_watchlist(name: str) -> tuple[int, str]:
     """Delete one watchlist from local DB and return status code/message."""
     cleaned = name.strip()
-    watchlists = _load_watchlists()
+    watchlists, error = _load_watchlists_result()
+    if error is not None or watchlists is None:
+        return 3, error or "Could not read watchlists database."
     if cleaned not in watchlists:
         return 2, f"Watchlist '{cleaned}' not found."
     del watchlists[cleaned]
@@ -405,7 +465,9 @@ def _merge_watchlists(source_one: str, source_two: str, target: str) -> tuple[in
     if not _watchlist_name_valid(left) or not _watchlist_name_valid(right) or not _watchlist_name_valid(dst):
         return 2, "Watchlist names must use letters, digits, '-', '_' or '.'."
 
-    watchlists = _load_watchlists()
+    watchlists, error = _load_watchlists_result()
+    if error is not None or watchlists is None:
+        return 3, error or "Could not read watchlists database."
     missing_sources = [name for name in (left, right) if name not in watchlists]
     if missing_sources:
         return 2, f"Watchlist(s) not found: {', '.join(missing_sources)}."
@@ -428,12 +490,16 @@ def _merge_watchlists(source_one: str, source_two: str, target: str) -> tuple[in
 
 def _list_watchlists() -> list[str]:
     """Return sorted watchlist names stored in local DB."""
-    return sorted(_load_watchlists().keys(), key=lambda item: item.lower())
+    names, error = _list_watchlists_result()
+    _set_watchlist_last_error(error)
+    return names or []
 
 
 def _watchlist_symbols(name: str) -> list[str] | None:
     """Return one watchlist symbol list, or None when not found."""
-    return _load_watchlists().get(name.strip())
+    symbols, error = _watchlist_symbols_result(name)
+    _set_watchlist_last_error(error)
+    return symbols
 
 
 def _validate_watchlist_symbol(symbol_input: str) -> str | None:
@@ -459,8 +525,10 @@ def _validate_watchlist_symbol(symbol_input: str) -> str | None:
 
 def _add_symbols_to_watchlist(name: str, symbol_inputs: list[str]) -> tuple[int, list[str], list[str], list[str]]:
     """Validate and add symbols to one watchlist, returning (rc, added, rejected, existing)."""
-    watchlists = _load_watchlists()
+    watchlists, error = _load_watchlists_result()
     cleaned_name = name.strip()
+    if error is not None or watchlists is None:
+        return 3, [], symbol_inputs, []
     if cleaned_name not in watchlists:
         return 2, [], symbol_inputs, []
 
@@ -487,8 +555,10 @@ def _add_symbols_to_watchlist(name: str, symbol_inputs: list[str]) -> tuple[int,
 
 def _remove_symbols_from_watchlist(name: str, symbol_inputs: list[str]) -> tuple[int, list[str], list[str]]:
     """Remove symbols from one watchlist, returning (rc, removed, missing)."""
-    watchlists = _load_watchlists()
+    watchlists, error = _load_watchlists_result()
     cleaned_name = name.strip()
+    if error is not None or watchlists is None:
+        return 3, [], symbol_inputs
     if cleaned_name not in watchlists:
         return 2, [], symbol_inputs
 
@@ -2452,7 +2522,7 @@ def _print_watchlist_snapshot(watchlist_name: str) -> int:
     """Render a live snapshot board for one stored watchlist."""
     symbols = _watchlist_symbols(watchlist_name)
     if symbols is None:
-        print(f"Watchlist '{watchlist_name}' not found.", file=sys.stderr)
+        print(_watchlist_last_error() or f"Watchlist '{watchlist_name}' not found.", file=sys.stderr)
         return 3
     if not symbols:
         print(f"Watchlist '{watchlist_name}' is empty. Use `add <code>` in this mode.", file=sys.stderr)
@@ -2974,7 +3044,7 @@ def _moves_targets_for_context(
     if active_watchlist:
         symbols = _watchlist_symbols(active_watchlist)
         if symbols is None:
-            print(f"Watchlist '{active_watchlist}' not found.", file=sys.stderr)
+            print(_watchlist_last_error() or f"Watchlist '{active_watchlist}' not found.", file=sys.stderr)
             return None, None
         if not symbols:
             print(f"Watchlist '{active_watchlist}' is empty. Use `add <code>` in this mode.", file=sys.stderr)
@@ -3966,12 +4036,18 @@ def _run_repl(
                     print(f"Usage: {cmd_token} list", file=sys.stderr)
                     continue
                 names = _list_watchlists()
+                if _watchlist_last_error() is not None:
+                    print(_watchlist_last_error(), file=sys.stderr)
+                    continue
                 if not names:
                     print("No watchlists found.")
                     continue
                 print("\nWatchlists:")
                 for name in names:
-                    symbols = _watchlist_symbols(name) or []
+                    symbols = _watchlist_symbols(name)
+                    if symbols is None:
+                        print(_watchlist_last_error() or f"Watchlist '{name}' not found.", file=sys.stderr)
+                        continue
                     print(f"- {name} ({len(symbols)} symbols)")
                 continue
             if sub == "delete":
@@ -4005,8 +4081,9 @@ def _run_repl(
                     continue
                 target_name = args[0]
 
-            if _watchlist_symbols(target_name) is None:
-                print(f"Watchlist '{target_name}' not found.", file=sys.stderr)
+            symbols = _watchlist_symbols(target_name)
+            if symbols is None:
+                print(_watchlist_last_error() or f"Watchlist '{target_name}' not found.", file=sys.stderr)
                 continue
             active_watchlist = target_name
             continue
@@ -4153,7 +4230,7 @@ def _run_repl(
         if lower in {"list", "ll"} and active_watchlist:
             symbols = _watchlist_symbols(active_watchlist)
             if symbols is None:
-                print(f"Watchlist '{active_watchlist}' not found.", file=sys.stderr)
+                print(_watchlist_last_error() or f"Watchlist '{active_watchlist}' not found.", file=sys.stderr)
                 continue
             if not symbols:
                 print(f"\n{active_watchlist} (0 symbols)")
@@ -4171,6 +4248,9 @@ def _run_repl(
                 print("Usage: add <stock code> <stock code> ...", file=sys.stderr)
                 continue
             rc, added, rejected, existing_symbols = _add_symbols_to_watchlist(active_watchlist, tokens)
+            if rc == 3:
+                print("Could not read watchlists database.", file=sys.stderr)
+                continue
             if rc != 0:
                 print(f"Watchlist '{active_watchlist}' not found.", file=sys.stderr)
                 continue
@@ -4190,6 +4270,9 @@ def _run_repl(
                     print("Usage: delete <stock code> <stock code> ...", file=sys.stderr)
                     continue
                 rc, removed, missing = _remove_symbols_from_watchlist(active_watchlist, tokens)
+                if rc == 3:
+                    print("Could not read watchlists database.", file=sys.stderr)
+                    continue
                 if rc != 0:
                     print(f"Watchlist '{active_watchlist}' not found.", file=sys.stderr)
                     continue
