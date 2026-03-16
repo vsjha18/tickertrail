@@ -93,6 +93,15 @@ class BranchHelperTests(unittest.TestCase):
         self.assertTrue(txt.endswith("\n"))
         self.assertFalse(cli._PROGRESS_STATE["active"])
 
+    def test_cancel_active_command_stops_progress_and_reports_cancel(self):
+        with (
+            patch("tickertrail.cli._progress_stop") as mock_stop,
+            patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
+            cli._cancel_active_command()
+        mock_stop.assert_called_once_with()
+        self.assertIn("Canceled current command.", err.getvalue())
+
     @patch("tickertrail.cli.time.sleep")
     @patch("tickertrail.cli.random.uniform", return_value=0.015)
     def test_ticker_fallback_pause_includes_jitter_and_backoff(self, mock_uniform, mock_sleep):
@@ -1780,6 +1789,15 @@ class BranchRenderAndReplTests(unittest.TestCase):
             self.assertEqual(cli._run_repl(None, None, None, 80, 20), 0)
         with patch("builtins.input", side_effect=KeyboardInterrupt):
             self.assertEqual(cli._run_repl(None, None, None, 80, 20), 0)
+
+    @patch("tickertrail.cli._enable_repl_history", return_value=None)
+    @patch("tickertrail.cli._cancel_active_command")
+    @patch("tickertrail.cli._print_index_board", side_effect=KeyboardInterrupt)
+    def test_run_repl_command_keyboard_interrupt_cancels_active_command(self, _mock_index, mock_cancel, _mock_hist):
+        with patch("builtins.input", side_effect=["index", "exit"]):
+            rc = cli._run_repl(None, None, None, 80, 20)
+        self.assertEqual(rc, 0)
+        mock_cancel.assert_called_once_with()
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     def test_run_repl_empty_command_continue(self, _mock_hist):

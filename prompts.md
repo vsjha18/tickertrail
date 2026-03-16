@@ -31,6 +31,8 @@ Core commands:
 - `reload` / `r`: refresh active quote and replay last chart/table view.
 - `index`: live market board with India + Global sections.
 - `index list`: curated index universe (symbol catalog) without live fetch.
+- `Ctrl+C` while a command is running: cancel only the active command, reset transient progress output, and return to the REPL prompt.
+- `Ctrl+C` on an idle prompt: exit the REPL.
 - `news <code>`: resolve symbol and print latest Yahoo Finance headlines (best-effort availability per ticker/region).
   - Render publish time in local timezone with relative age when available; parse timestamp fields from both top-level items and nested `content` payloads.
   - Keep output compact: `* (age) headline` plus link on next line, one blank line between items, no source row.
@@ -505,6 +507,9 @@ Implement REPL controller with:
 - refresh semantics:
   - `reload` (canonical) = refresh active quote + replay last non-quote view (`c`/`cc`/`t`/`tt`)
   - `r` = alias of `reload`
+- interrupt semantics:
+  - `Ctrl+C` during command execution cancels the active command without exiting REPL
+  - `Ctrl+C` while waiting on prompt exits REPL
 
 Important:
 - Keep `c` and `cc` separate by design.

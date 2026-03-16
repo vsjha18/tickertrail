@@ -340,6 +340,8 @@ Final           118.48      126.02      122.63
 - `cache clear`: clear today's history cache
 - `reload` / `r`: refresh quote and replay last chart/table
 - `cls` / `clear`: clear terminal
+- Press `Ctrl+C` during an in-progress command to cancel that command and return to the prompt
+- Press `Ctrl+C` on an empty prompt to exit the REPL
 - `quit` / `exit`: leave REPL
 - `!<shell-cmd>`: run shell command
 

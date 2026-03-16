@@ -692,6 +692,12 @@ def _progress_stop() -> None:
     _PROGRESS_STATE["emitted"] = False
 
 
+def _cancel_active_command() -> None:
+    """Reset transient progress state after canceling an in-flight REPL command."""
+    _progress_stop()
+    print("Canceled current command.", file=sys.stderr)
+
+
 @contextmanager
 def _progress_scope(label: str):
     """Context manager for showing progress during grouped network fetches."""
@@ -3937,606 +3943,611 @@ def _run_repl(
             continue
         _reset_network_call_metrics()
         report_pending = True
-        lower = cmd.lower()
-        if lower in {"quit", "exit"}:
-            _print_network_call_metrics()
-            return 0
-        if lower == "cd ..":
-            print("Unknown command 'cd ..'.", file=sys.stderr)
-            continue
-        if lower in {"quote", "q"} or lower.startswith("quote "):
-            if lower.startswith("quote ") or (lower.startswith("q ") and lower != "q"):
-                print("Usage: quote", file=sys.stderr)
-                continue
-            if active_watchlist:
-                print("quote is unavailable in watchlist mode. Exit watchlist mode first.", file=sys.stderr)
-                continue
-            if not current_symbol:
-                print("No active symbol. Enter a symbol first.", file=sys.stderr)
-                continue
-            refreshed_info = _get_quote_payload(current_symbol)
-            if not _has_quote_data(refreshed_info) and _is_index_context_symbol(current_symbol):
-                fallback_info = _index_quote_fallback_payload(current_symbol)
-                if fallback_info is not None:
-                    refreshed_info = fallback_info
-            if not _has_quote_data(refreshed_info):
-                print(f"Could not fetch quote for '{current_symbol}'.", file=sys.stderr)
-                continue
-            current_info = refreshed_info
-            _print_quote(current_symbol, current_symbol, include_after_hours=True, preloaded_info=current_info)
-            last_view_kind = "quote"
-            last_view_args = {}
-            continue
-        if lower in {"h", "help"}:
-            _print_help(None)
-            continue
-        if lower.startswith("help "):
-            _print_help(cmd.split(maxsplit=1)[1].strip())
-            continue
-        if lower in {"cls", "clear"}:
-            # ANSI clear-screen + cursor-home; keep REPL session active.
-            print("\033[2J\033[H", end="")
-            continue
-        if lower == "cache" or lower.startswith("cache "):
-            # Decision block: keep cache grammar explicit to avoid ambiguous symbol parsing.
-            if lower == "cache":
-                _print_history_cache_summary()
-            elif lower == "cache clear":
-                # Keep cache control explicit and scoped: only today's history cache bucket is flushed.
-                deleted = price_history.clear_history_cache_today()
-                if deleted:
-                    print("Cleared today's history cache.")
-                else:
-                    print("Today's history cache is already empty.")
-            else:
-                print("Usage: cache | cache clear", file=sys.stderr)
-            continue
-        if cmd.startswith("!"):
-            shell_cmd = cmd[1:].strip()
-            if not shell_cmd:
-                print("Usage: !<shell-cmd>", file=sys.stderr)
-                continue
-            # Shell passthrough intentionally mirrors terminal behavior for quick ad-hoc tasks.
-            subprocess.run(shell_cmd, shell=True, check=False)
-            continue
-        if lower == "wl":
-            # Bare wl is a convenience alias for `wl list`.
-            cmd = "wl list"
+        try:
             lower = cmd.lower()
-        if lower == "watchlist":
-            # Bare watchlist token exits watchlist mode and returns to symbol-mode prompt.
-            if active_watchlist is not None:
-                active_watchlist = None
-                print("Watchlist mode exited.")
-            continue
-        if lower.startswith("watchlist ") or lower.startswith("wl "):
-            # Branch-heavy parser for watchlist management grammar and mode switching.
-            parts = cmd.split()
-            cmd_token = parts[0].lower()
-            args = parts[1:]
-            if len(args) == 0:
-                if cmd_token == "wl":
-                    args = ["list"]
-                else:
-                    if active_watchlist is not None:
-                        active_watchlist = None
-                        print("Watchlist mode exited.")
-                    continue
-            sub = args[0].lower()
-            if sub == "create":
-                if len(args) != 2:
-                    print(f"Usage: {cmd_token} create <name>", file=sys.stderr)
-                    continue
-                rc, msg = _create_watchlist(args[1])
-                target = sys.stdout if rc == 0 else sys.stderr
-                print(msg, file=target)
+            if lower in {"quit", "exit"}:
+                _print_network_call_metrics()
+                return 0
+            if lower == "cd ..":
+                print("Unknown command 'cd ..'.", file=sys.stderr)
                 continue
-            if sub == "list":
-                if len(args) != 1:
-                    print(f"Usage: {cmd_token} list", file=sys.stderr)
+            if lower in {"quote", "q"} or lower.startswith("quote "):
+                if lower.startswith("quote ") or (lower.startswith("q ") and lower != "q"):
+                    print("Usage: quote", file=sys.stderr)
                     continue
-                names = _list_watchlists()
-                if _watchlist_last_error() is not None:
-                    print(_watchlist_last_error(), file=sys.stderr)
+                if active_watchlist:
+                    print("quote is unavailable in watchlist mode. Exit watchlist mode first.", file=sys.stderr)
                     continue
-                if not names:
-                    print("No watchlists found.")
+                if not current_symbol:
+                    print("No active symbol. Enter a symbol first.", file=sys.stderr)
                     continue
-                print("\nWatchlists:")
-                for name in names:
-                    symbols = _watchlist_symbols(name)
-                    if symbols is None:
-                        print(_watchlist_last_error() or f"Watchlist '{name}' not found.", file=sys.stderr)
-                        continue
-                    print(f"- {name} ({len(symbols)} symbols)")
-                continue
-            if sub == "delete":
-                if len(args) != 2:
-                    print(f"Usage: {cmd_token} delete <name>", file=sys.stderr)
-                    continue
-                rc, msg = _delete_watchlist(args[1])
-                if rc == 0 and active_watchlist == args[1]:
-                    active_watchlist = None
-                target = sys.stdout if rc == 0 else sys.stderr
-                print(msg, file=target)
-                continue
-            if sub == "merge":
-                if len(args) != 4:
-                    print(f"Usage: {cmd_token} merge <wl1> <wl2> <target>", file=sys.stderr)
-                    continue
-                rc, msg = _merge_watchlists(args[1], args[2], args[3])
-                target = sys.stdout if rc == 0 else sys.stderr
-                print(msg, file=target)
-                continue
-
-            # Canonical entrypoint: `watchlist open <name>`; shorthand `watchlist <name>` remains supported.
-            if sub == "open":
-                if len(args) != 2:
-                    print(f"Usage: {cmd_token} open <name>", file=sys.stderr)
-                    continue
-                target_name = args[1]
-            else:
-                if len(args) != 1:
-                    print(f"Usage: {cmd_token} <name>", file=sys.stderr)
-                    continue
-                target_name = args[0]
-
-            symbols = _watchlist_symbols(target_name)
-            if symbols is None:
-                print(_watchlist_last_error() or f"Watchlist '{target_name}' not found.", file=sys.stderr)
-                continue
-            active_watchlist = target_name
-            continue
-        if lower in {"reload", "r", "refresh"}:
-            # Data refresh: always refresh quote, then replay last non-quote view.
-            if current_symbol:
                 refreshed_info = _get_quote_payload(current_symbol)
-                if _has_quote_data(refreshed_info):
-                    current_info = refreshed_info
-                    _print_quote(current_symbol, current_symbol, include_after_hours=True, preloaded_info=current_info)
-                    if last_view_kind == "chart":
-                        _draw_chart(
-                            current_symbol,
-                            period=str(last_view_args.get("period", "6mo")),
-                            interval=str(last_view_args.get("interval", "1d")),
-                            height=height,
-                            width=width,
-                            info=current_info,
-                            benchmark_override=last_view_args.get("benchmark_override"),
-                        )
-                    elif last_view_kind == "intraday":
-                        _draw_chart(
-                            current_symbol,
-                            period="1d",
-                            interval=str(last_view_args.get("interval", "5m")),
-                            height=height,
-                            width=width,
-                            info=current_info,
-                            benchmark_override=last_view_args.get("benchmark_override"),
-                        )
-                    elif last_view_kind == "table":
-                        _render_rebased_table(
-                            symbol=current_symbol,
-                            info=current_info,
-                            benchmark_symbol=last_view_args.get("benchmark_symbol"),
-                            benchmark_label=last_view_args.get("benchmark_label"),
-                            period_token=str(last_view_args.get("period_token", "6mo")),
-                            interval_override=last_view_args.get("interval_override"),
-                        )
-                    elif last_view_kind == "compare":
-                        _render_compare_table(
-                            symbol_inputs=list(last_view_args.get("symbols", [])),
-                            period_token=str(last_view_args.get("period_token", "6mo")),
-                            interval_override=last_view_args.get("interval_override"),
-                        )
+                if not _has_quote_data(refreshed_info) and _is_index_context_symbol(current_symbol):
+                    fallback_info = _index_quote_fallback_payload(current_symbol)
+                    if fallback_info is not None:
+                        refreshed_info = fallback_info
+                if not _has_quote_data(refreshed_info):
+                    print(f"Could not fetch quote for '{current_symbol}'.", file=sys.stderr)
+                    continue
+                current_info = refreshed_info
+                _print_quote(current_symbol, current_symbol, include_after_hours=True, preloaded_info=current_info)
+                last_view_kind = "quote"
+                last_view_args = {}
+                continue
+            if lower in {"h", "help"}:
+                _print_help(None)
+                continue
+            if lower.startswith("help "):
+                _print_help(cmd.split(maxsplit=1)[1].strip())
+                continue
+            if lower in {"cls", "clear"}:
+                # ANSI clear-screen + cursor-home; keep REPL session active.
+                print("\033[2J\033[H", end="")
+                continue
+            if lower == "cache" or lower.startswith("cache "):
+                # Decision block: keep cache grammar explicit to avoid ambiguous symbol parsing.
+                if lower == "cache":
+                    _print_history_cache_summary()
+                elif lower == "cache clear":
+                    # Keep cache control explicit and scoped: only today's history cache bucket is flushed.
+                    deleted = price_history.clear_history_cache_today()
+                    if deleted:
+                        print("Cleared today's history cache.")
+                    else:
+                        print("Today's history cache is already empty.")
                 else:
-                    print(f"Could not refresh quote for '{current_symbol}'.", file=sys.stderr)
-            else:
-                print("No active symbol. Enter a symbol first.", file=sys.stderr)
-            continue
-        if lower == "index":
-            _print_index_board()
-            continue
-        if lower == "index list":
-            _print_index_catalog()
-            continue
-        if lower == "code" or lower.startswith("code "):
-            _print_code_matches(cmd[4:])
-            continue
-        if lower == "news" or lower.startswith("news "):
-            # Keep grammar strict so accidental bare `news` can be corrected quickly.
-            if len(cmd.split(maxsplit=1)) != 2:
-                print("Usage: news <code>", file=sys.stderr)
+                    print("Usage: cache | cache clear", file=sys.stderr)
                 continue
-            _print_symbol_news(cmd.split(maxsplit=1)[1].strip())
-            continue
-        if lower == "snap":
-            if active_watchlist:
-                _print_watchlist_snapshot(active_watchlist)
+            if cmd.startswith("!"):
+                shell_cmd = cmd[1:].strip()
+                if not shell_cmd:
+                    print("Usage: !<shell-cmd>", file=sys.stderr)
+                    continue
+                # Shell passthrough intentionally mirrors terminal behavior for quick ad-hoc tasks.
+                subprocess.run(shell_cmd, shell=True, check=False)
                 continue
-            if not current_symbol:
-                print("No active symbol. Enter an index symbol first.", file=sys.stderr)
+            if lower == "wl":
+                # Bare wl is a convenience alias for `wl list`.
+                cmd = "wl list"
+                lower = cmd.lower()
+            if lower == "watchlist":
+                # Bare watchlist token exits watchlist mode and returns to symbol-mode prompt.
+                if active_watchlist is not None:
+                    active_watchlist = None
+                    print("Watchlist mode exited.")
                 continue
-            _print_index_constituent_snap(current_symbol)
-            continue
-        if lower == "move" or lower.startswith("move ") or lower == "moves" or lower.startswith("moves "):
-            parts = cmd.split()
-            args = parts[1:] if parts else []
-            symbol_inputs, period_token, parse_error = _parse_scope_override_with_period(
-                args,
-                command_name="moves",
-                default_period="1mo",
-                period_validator=_is_analytics_period_token,
-                period_hint=_ANALYTICS_PERIOD_HINT,
-            )
-            if parse_error:
-                print(parse_error, file=sys.stderr)
+            if lower.startswith("watchlist ") or lower.startswith("wl "):
+                # Branch-heavy parser for watchlist management grammar and mode switching.
+                parts = cmd.split()
+                cmd_token = parts[0].lower()
+                args = parts[1:]
+                if len(args) == 0:
+                    if cmd_token == "wl":
+                        args = ["list"]
+                    else:
+                        if active_watchlist is not None:
+                            active_watchlist = None
+                            print("Watchlist mode exited.")
+                        continue
+                sub = args[0].lower()
+                if sub == "create":
+                    if len(args) != 2:
+                        print(f"Usage: {cmd_token} create <name>", file=sys.stderr)
+                        continue
+                    rc, msg = _create_watchlist(args[1])
+                    target = sys.stdout if rc == 0 else sys.stderr
+                    print(msg, file=target)
+                    continue
+                if sub == "list":
+                    if len(args) != 1:
+                        print(f"Usage: {cmd_token} list", file=sys.stderr)
+                        continue
+                    names = _list_watchlists()
+                    if _watchlist_last_error() is not None:
+                        print(_watchlist_last_error(), file=sys.stderr)
+                        continue
+                    if not names:
+                        print("No watchlists found.")
+                        continue
+                    print("\nWatchlists:")
+                    for name in names:
+                        symbols = _watchlist_symbols(name)
+                        if symbols is None:
+                            print(_watchlist_last_error() or f"Watchlist '{name}' not found.", file=sys.stderr)
+                            continue
+                        print(f"- {name} ({len(symbols)} symbols)")
+                    continue
+                if sub == "delete":
+                    if len(args) != 2:
+                        print(f"Usage: {cmd_token} delete <name>", file=sys.stderr)
+                        continue
+                    rc, msg = _delete_watchlist(args[1])
+                    if rc == 0 and active_watchlist == args[1]:
+                        active_watchlist = None
+                    target = sys.stdout if rc == 0 else sys.stderr
+                    print(msg, file=target)
+                    continue
+                if sub == "merge":
+                    if len(args) != 4:
+                        print(f"Usage: {cmd_token} merge <wl1> <wl2> <target>", file=sys.stderr)
+                        continue
+                    rc, msg = _merge_watchlists(args[1], args[2], args[3])
+                    target = sys.stdout if rc == 0 else sys.stderr
+                    print(msg, file=target)
+                    continue
+
+                # Canonical entrypoint: `watchlist open <name>`; shorthand `watchlist <name>` remains supported.
+                if sub == "open":
+                    if len(args) != 2:
+                        print(f"Usage: {cmd_token} open <name>", file=sys.stderr)
+                        continue
+                    target_name = args[1]
+                else:
+                    if len(args) != 1:
+                        print(f"Usage: {cmd_token} <name>", file=sys.stderr)
+                        continue
+                    target_name = args[0]
+
+                symbols = _watchlist_symbols(target_name)
+                if symbols is None:
+                    print(_watchlist_last_error() or f"Watchlist '{target_name}' not found.", file=sys.stderr)
+                    continue
+                active_watchlist = target_name
                 continue
-            assert period_token is not None
-            _print_moves_snapshot(
-                current_symbol=current_symbol,
-                active_watchlist=active_watchlist,
-                period_token=period_token,
-                explicit_symbols=symbol_inputs,
-            )
-            continue
-        if lower == "trend" or lower.startswith("trend ") or lower == "trends" or lower.startswith("trends "):
-            parts = cmd.split()
-            args = parts[1:] if parts else []
-            symbol_inputs, parse_error = _parse_scope_override_no_period(args, command_name="trend")
-            if parse_error:
-                print(parse_error, file=sys.stderr)
+            if lower in {"reload", "r", "refresh"}:
+                # Data refresh: always refresh quote, then replay last non-quote view.
+                if current_symbol:
+                    refreshed_info = _get_quote_payload(current_symbol)
+                    if _has_quote_data(refreshed_info):
+                        current_info = refreshed_info
+                        _print_quote(current_symbol, current_symbol, include_after_hours=True, preloaded_info=current_info)
+                        if last_view_kind == "chart":
+                            _draw_chart(
+                                current_symbol,
+                                period=str(last_view_args.get("period", "6mo")),
+                                interval=str(last_view_args.get("interval", "1d")),
+                                height=height,
+                                width=width,
+                                info=current_info,
+                                benchmark_override=last_view_args.get("benchmark_override"),
+                            )
+                        elif last_view_kind == "intraday":
+                            _draw_chart(
+                                current_symbol,
+                                period="1d",
+                                interval=str(last_view_args.get("interval", "5m")),
+                                height=height,
+                                width=width,
+                                info=current_info,
+                                benchmark_override=last_view_args.get("benchmark_override"),
+                            )
+                        elif last_view_kind == "table":
+                            _render_rebased_table(
+                                symbol=current_symbol,
+                                info=current_info,
+                                benchmark_symbol=last_view_args.get("benchmark_symbol"),
+                                benchmark_label=last_view_args.get("benchmark_label"),
+                                period_token=str(last_view_args.get("period_token", "6mo")),
+                                interval_override=last_view_args.get("interval_override"),
+                            )
+                        elif last_view_kind == "compare":
+                            _render_compare_table(
+                                symbol_inputs=list(last_view_args.get("symbols", [])),
+                                period_token=str(last_view_args.get("period_token", "6mo")),
+                                interval_override=last_view_args.get("interval_override"),
+                            )
+                    else:
+                        print(f"Could not refresh quote for '{current_symbol}'.", file=sys.stderr)
+                else:
+                    print("No active symbol. Enter a symbol first.", file=sys.stderr)
                 continue
-            _print_trend_snapshot(
-                current_symbol=current_symbol,
-                active_watchlist=active_watchlist,
-                explicit_symbols=symbol_inputs,
-            )
-            continue
-        if lower == "relret" or lower.startswith("relret ") or lower == "rr" or lower.startswith("rr "):
-            relret_parts = cmd.split()
-            symbol_inputs, period_token, benchmark_input, parse_error = _parse_relret_args(relret_parts[1:])
-            if parse_error:
-                print(parse_error, file=sys.stderr)
+            if lower == "index":
+                _print_index_board()
                 continue
-            assert period_token is not None
-            _print_relret_snapshot(
-                current_symbol=current_symbol,
-                active_watchlist=active_watchlist,
-                period_token=period_token,
-                explicit_symbols=symbol_inputs,
-                benchmark_input=benchmark_input,
-            )
-            continue
-        if lower == "corr" or lower.startswith("corr "):
-            symbol_inputs, period_token, parse_error = _parse_scope_override_with_period(
-                cmd.split()[1:],
-                command_name="corr",
-                default_period="1mo",
-                period_validator=_is_analytics_period_token,
-                period_hint=_ANALYTICS_PERIOD_HINT,
-            )
-            if parse_error:
-                print(parse_error, file=sys.stderr)
+            if lower == "index list":
+                _print_index_catalog()
                 continue
-            assert period_token is not None
-            _print_corr_snapshot(
-                current_symbol=current_symbol,
-                active_watchlist=active_watchlist,
-                period_token=period_token,
-                explicit_symbols=symbol_inputs,
-            )
-            continue
-        if lower in {"list", "ll"} and active_watchlist:
-            symbols = _watchlist_symbols(active_watchlist)
-            if symbols is None:
-                print(_watchlist_last_error() or f"Watchlist '{active_watchlist}' not found.", file=sys.stderr)
+            if lower == "code" or lower.startswith("code "):
+                _print_code_matches(cmd[4:])
                 continue
-            if not symbols:
-                print(f"\n{active_watchlist} (0 symbols)")
+            if lower == "news" or lower.startswith("news "):
+                # Keep grammar strict so accidental bare `news` can be corrected quickly.
+                if len(cmd.split(maxsplit=1)) != 2:
+                    print("Usage: news <code>", file=sys.stderr)
+                    continue
+                _print_symbol_news(cmd.split(maxsplit=1)[1].strip())
                 continue
-            print(f"\n{active_watchlist} ({len(symbols)} symbols)")
-            for idx, symbol in enumerate(symbols, start=1):
-                print(f"{idx:>2}. {symbol}")
-            continue
-        if lower == "add" or lower.startswith("add "):
-            if not active_watchlist:
-                print("`add` is available only in watchlist mode.", file=sys.stderr)
+            if lower == "snap":
+                if active_watchlist:
+                    _print_watchlist_snapshot(active_watchlist)
+                    continue
+                if not current_symbol:
+                    print("No active symbol. Enter an index symbol first.", file=sys.stderr)
+                    continue
+                _print_index_constituent_snap(current_symbol)
                 continue
-            tokens = cmd.split()[1:]
-            if not tokens:
-                print("Usage: add <stock code> <stock code> ...", file=sys.stderr)
+            if lower == "move" or lower.startswith("move ") or lower == "moves" or lower.startswith("moves "):
+                parts = cmd.split()
+                args = parts[1:] if parts else []
+                symbol_inputs, period_token, parse_error = _parse_scope_override_with_period(
+                    args,
+                    command_name="moves",
+                    default_period="1mo",
+                    period_validator=_is_analytics_period_token,
+                    period_hint=_ANALYTICS_PERIOD_HINT,
+                )
+                if parse_error:
+                    print(parse_error, file=sys.stderr)
+                    continue
+                assert period_token is not None
+                _print_moves_snapshot(
+                    current_symbol=current_symbol,
+                    active_watchlist=active_watchlist,
+                    period_token=period_token,
+                    explicit_symbols=symbol_inputs,
+                )
                 continue
-            rc, added, rejected, existing_symbols = _add_symbols_to_watchlist(active_watchlist, tokens)
-            if rc == 3:
-                print("Could not read watchlists database.", file=sys.stderr)
+            if lower == "trend" or lower.startswith("trend ") or lower == "trends" or lower.startswith("trends "):
+                parts = cmd.split()
+                args = parts[1:] if parts else []
+                symbol_inputs, parse_error = _parse_scope_override_no_period(args, command_name="trend")
+                if parse_error:
+                    print(parse_error, file=sys.stderr)
+                    continue
+                _print_trend_snapshot(
+                    current_symbol=current_symbol,
+                    active_watchlist=active_watchlist,
+                    explicit_symbols=symbol_inputs,
+                )
                 continue
-            if rc != 0:
-                print(f"Watchlist '{active_watchlist}' not found.", file=sys.stderr)
+            if lower == "relret" or lower.startswith("relret ") or lower == "rr" or lower.startswith("rr "):
+                relret_parts = cmd.split()
+                symbol_inputs, period_token, benchmark_input, parse_error = _parse_relret_args(relret_parts[1:])
+                if parse_error:
+                    print(parse_error, file=sys.stderr)
+                    continue
+                assert period_token is not None
+                _print_relret_snapshot(
+                    current_symbol=current_symbol,
+                    active_watchlist=active_watchlist,
+                    period_token=period_token,
+                    explicit_symbols=symbol_inputs,
+                    benchmark_input=benchmark_input,
+                )
                 continue
-            if added:
-                print(f"Added to {active_watchlist}: {', '.join(added)}")
-            if existing_symbols:
-                print(f"Already exists in {active_watchlist}: {', '.join(existing_symbols)}")
-            if rejected:
-                print(f"Rejected (invalid code): {', '.join(rejected)}", file=sys.stderr)
-            if not added and not rejected and not existing_symbols:
-                print("No new symbols added.")
-            continue
-        if lower == "delete" or lower.startswith("delete "):
-            if active_watchlist:
+            if lower == "corr" or lower.startswith("corr "):
+                symbol_inputs, period_token, parse_error = _parse_scope_override_with_period(
+                    cmd.split()[1:],
+                    command_name="corr",
+                    default_period="1mo",
+                    period_validator=_is_analytics_period_token,
+                    period_hint=_ANALYTICS_PERIOD_HINT,
+                )
+                if parse_error:
+                    print(parse_error, file=sys.stderr)
+                    continue
+                assert period_token is not None
+                _print_corr_snapshot(
+                    current_symbol=current_symbol,
+                    active_watchlist=active_watchlist,
+                    period_token=period_token,
+                    explicit_symbols=symbol_inputs,
+                )
+                continue
+            if lower in {"list", "ll"} and active_watchlist:
+                symbols = _watchlist_symbols(active_watchlist)
+                if symbols is None:
+                    print(_watchlist_last_error() or f"Watchlist '{active_watchlist}' not found.", file=sys.stderr)
+                    continue
+                if not symbols:
+                    print(f"\n{active_watchlist} (0 symbols)")
+                    continue
+                print(f"\n{active_watchlist} ({len(symbols)} symbols)")
+                for idx, symbol in enumerate(symbols, start=1):
+                    print(f"{idx:>2}. {symbol}")
+                continue
+            if lower == "add" or lower.startswith("add "):
+                if not active_watchlist:
+                    print("`add` is available only in watchlist mode.", file=sys.stderr)
+                    continue
                 tokens = cmd.split()[1:]
                 if not tokens:
-                    print("Usage: delete <stock code> <stock code> ...", file=sys.stderr)
+                    print("Usage: add <stock code> <stock code> ...", file=sys.stderr)
                     continue
-                rc, removed, missing = _remove_symbols_from_watchlist(active_watchlist, tokens)
+                rc, added, rejected, existing_symbols = _add_symbols_to_watchlist(active_watchlist, tokens)
                 if rc == 3:
                     print("Could not read watchlists database.", file=sys.stderr)
                     continue
                 if rc != 0:
                     print(f"Watchlist '{active_watchlist}' not found.", file=sys.stderr)
                     continue
-                if removed:
-                    print(f"Deleted from {active_watchlist}: {', '.join(removed)}")
-                if missing:
-                    print(f"Not present in {active_watchlist}: {', '.join(missing)}", file=sys.stderr)
-                if not removed and not missing:
-                    print("No symbols deleted.")
+                if added:
+                    print(f"Added to {active_watchlist}: {', '.join(added)}")
+                if existing_symbols:
+                    print(f"Already exists in {active_watchlist}: {', '.join(existing_symbols)}")
+                if rejected:
+                    print(f"Rejected (invalid code): {', '.join(rejected)}", file=sys.stderr)
+                if not added and not rejected and not existing_symbols:
+                    print("No new symbols added.")
                 continue
-        if lower == "cmp" or lower.startswith("cmp "):
-            parsed_compare, parse_error = _parse_compare_command_args(cmd.split()[1:])
-            if parse_error:
-                print(parse_error, file=sys.stderr)
-                continue
-            assert parsed_compare is not None
-            _render_compare_table(
-                symbol_inputs=list(parsed_compare.symbols),
-                period_token=parsed_compare.period_token,
-                interval_override=parsed_compare.interval_override,
-            )
-            last_view_kind = "compare"
-            last_view_args = {
-                "symbols": list(parsed_compare.symbols),
-                "period_token": parsed_compare.period_token,
-                "interval_override": parsed_compare.interval_override,
-            }
-            continue
-
-        if lower == "table" or lower.startswith("table "):
-            parts = cmd.split()
-            if len(parts) < 2:
-                print("Usage: table <swing|intra> ...", file=sys.stderr)
-                continue
-            mode = parts[1].lower()
-            # Canonical router keeps legacy alias implementation as the single execution path.
-            if mode not in {"swing", "intra"}:
-                print("Usage: table <swing|intra> ...", file=sys.stderr)
-                continue
-            alias = "t" if mode == "swing" else "tt"
-            tail = " ".join(parts[2:])
-            cmd = f"{alias} {tail}".strip()
-            lower = cmd.lower()
-
-        if lower == "tt" or lower.startswith("tt "):
-            if not current_symbol:
-                print("No active symbol. Enter a symbol first.", file=sys.stderr)
-                continue
-
-            args = cmd.split()[1:]
-            parsed_intraday, parse_error = _parse_intraday_command_args(args, command_name="tt")
-            if parse_error:
-                print(parse_error, file=sys.stderr)
-                continue
-            assert parsed_intraday is not None
-            period_token = "1d"
-            interval_override = parsed_intraday.interval
-            benchmark_input = parsed_intraday.benchmark_input
-
-            bench_symbol, bench_label, bench_error = _resolve_benchmark_for_table(
-                active_symbol=current_symbol,
-                active_info=current_info,
-                benchmark_input=benchmark_input,
-            )
-            if bench_error:
-                print(bench_error, file=sys.stderr)
+            if lower == "delete" or lower.startswith("delete "):
+                if active_watchlist:
+                    tokens = cmd.split()[1:]
+                    if not tokens:
+                        print("Usage: delete <stock code> <stock code> ...", file=sys.stderr)
+                        continue
+                    rc, removed, missing = _remove_symbols_from_watchlist(active_watchlist, tokens)
+                    if rc == 3:
+                        print("Could not read watchlists database.", file=sys.stderr)
+                        continue
+                    if rc != 0:
+                        print(f"Watchlist '{active_watchlist}' not found.", file=sys.stderr)
+                        continue
+                    if removed:
+                        print(f"Deleted from {active_watchlist}: {', '.join(removed)}")
+                    if missing:
+                        print(f"Not present in {active_watchlist}: {', '.join(missing)}", file=sys.stderr)
+                    if not removed and not missing:
+                        print("No symbols deleted.")
+                    continue
+            if lower == "cmp" or lower.startswith("cmp "):
+                parsed_compare, parse_error = _parse_compare_command_args(cmd.split()[1:])
+                if parse_error:
+                    print(parse_error, file=sys.stderr)
+                    continue
+                assert parsed_compare is not None
+                _render_compare_table(
+                    symbol_inputs=list(parsed_compare.symbols),
+                    period_token=parsed_compare.period_token,
+                    interval_override=parsed_compare.interval_override,
+                )
+                last_view_kind = "compare"
+                last_view_args = {
+                    "symbols": list(parsed_compare.symbols),
+                    "period_token": parsed_compare.period_token,
+                    "interval_override": parsed_compare.interval_override,
+                }
                 continue
 
-            _render_rebased_table(
-                symbol=current_symbol,
-                info=current_info,
-                benchmark_symbol=bench_symbol,
-                benchmark_label=bench_label,
-                period_token=period_token,
-                interval_override=interval_override,
-            )
-            last_view_kind = "table"
-            last_view_args = {
-                "benchmark_symbol": bench_symbol,
-                "benchmark_label": bench_label,
-                "period_token": period_token,
-                "interval_override": interval_override,
-            }
-            continue
+            if lower == "table" or lower.startswith("table "):
+                parts = cmd.split()
+                if len(parts) < 2:
+                    print("Usage: table <swing|intra> ...", file=sys.stderr)
+                    continue
+                mode = parts[1].lower()
+                # Canonical router keeps legacy alias implementation as the single execution path.
+                if mode not in {"swing", "intra"}:
+                    print("Usage: table <swing|intra> ...", file=sys.stderr)
+                    continue
+                alias = "t" if mode == "swing" else "tt"
+                tail = " ".join(parts[2:])
+                cmd = f"{alias} {tail}".strip()
+                lower = cmd.lower()
 
-        if lower == "t" or lower.startswith("t "):
-            if not current_symbol:
-                print("No active symbol. Enter a symbol first.", file=sys.stderr)
-                continue
-            # Table mode: parse grammar first, then resolve benchmark symbol.
-            parsed, parse_error = _parse_swing_command_args(cmd.split()[1:], command_name="t")
-            if parse_error:
-                print(parse_error, file=sys.stderr)
-                continue
-            assert parsed is not None
+            if lower == "tt" or lower.startswith("tt "):
+                if not current_symbol:
+                    print("No active symbol. Enter a symbol first.", file=sys.stderr)
+                    continue
 
-            bench_symbol, bench_label, bench_error = _resolve_benchmark_for_table(
-                active_symbol=current_symbol,
-                active_info=current_info,
-                benchmark_input=parsed.benchmark_input,
-            )
-            if bench_error:
-                print(bench_error, file=sys.stderr)
-                continue
+                args = cmd.split()[1:]
+                parsed_intraday, parse_error = _parse_intraday_command_args(args, command_name="tt")
+                if parse_error:
+                    print(parse_error, file=sys.stderr)
+                    continue
+                assert parsed_intraday is not None
+                period_token = "1d"
+                interval_override = parsed_intraday.interval
+                benchmark_input = parsed_intraday.benchmark_input
 
-            _render_rebased_table(
-                symbol=current_symbol,
-                info=current_info,
-                benchmark_symbol=bench_symbol,
-                benchmark_label=bench_label,
-                period_token=parsed.period_token,
-                interval_override=parsed.interval_override,
-            )
-            last_view_kind = "table"
-            last_view_args = {
-                "benchmark_symbol": bench_symbol,
-                "benchmark_label": bench_label,
-                "period_token": parsed.period_token,
-                "interval_override": parsed.interval_override,
-            }
-            continue
+                bench_symbol, bench_label, bench_error = _resolve_benchmark_for_table(
+                    active_symbol=current_symbol,
+                    active_info=current_info,
+                    benchmark_input=benchmark_input,
+                )
+                if bench_error:
+                    print(bench_error, file=sys.stderr)
+                    continue
 
-        if lower == "chart" or lower.startswith("chart "):
-            parts = cmd.split()
-            if len(parts) < 2:
-                print("Usage: chart <swing|intra> ...", file=sys.stderr)
-                continue
-            mode = parts[1].lower()
-            # Canonical router keeps legacy alias implementation as the single execution path.
-            if mode not in {"swing", "intra"}:
-                print("Usage: chart <swing|intra> ...", file=sys.stderr)
-                continue
-            alias = "c" if mode == "swing" else "cc"
-            tail = " ".join(parts[2:])
-            cmd = f"{alias} {tail}".strip()
-            lower = cmd.lower()
-
-        if lower == "cc" or lower.startswith("cc "):
-            if not current_symbol:
-                print("No active symbol. Enter a symbol first.", file=sys.stderr)
+                _render_rebased_table(
+                    symbol=current_symbol,
+                    info=current_info,
+                    benchmark_symbol=bench_symbol,
+                    benchmark_label=bench_label,
+                    period_token=period_token,
+                    interval_override=interval_override,
+                )
+                last_view_kind = "table"
+                last_view_args = {
+                    "benchmark_symbol": bench_symbol,
+                    "benchmark_label": bench_label,
+                    "period_token": period_token,
+                    "interval_override": interval_override,
+                }
                 continue
 
-            # Intraday mode is restricted to minute intervals and optional benchmark override.
-            parsed, parse_error = _parse_intraday_command_args(cmd.split()[1:])
-            if parse_error:
-                print(parse_error, file=sys.stderr)
-                continue
-            assert parsed is not None
+            if lower == "t" or lower.startswith("t "):
+                if not current_symbol:
+                    print("No active symbol. Enter a symbol first.", file=sys.stderr)
+                    continue
+                # Table mode: parse grammar first, then resolve benchmark symbol.
+                parsed, parse_error = _parse_swing_command_args(cmd.split()[1:], command_name="t")
+                if parse_error:
+                    print(parse_error, file=sys.stderr)
+                    continue
+                assert parsed is not None
 
-            bench_override, bench_error = _resolve_benchmark_override(parsed.benchmark_input)
-            if bench_error:
-                print(bench_error, file=sys.stderr)
-                continue
+                bench_symbol, bench_label, bench_error = _resolve_benchmark_for_table(
+                    active_symbol=current_symbol,
+                    active_info=current_info,
+                    benchmark_input=parsed.benchmark_input,
+                )
+                if bench_error:
+                    print(bench_error, file=sys.stderr)
+                    continue
 
-            _draw_chart(
-                current_symbol,
-                period="1d",
-                interval=parsed.interval,
-                height=height,
-                width=width,
-                info=current_info,
-                benchmark_override=bench_override,
-            )
-            last_view_kind = "intraday"
-            last_view_args = {"interval": parsed.interval, "benchmark_override": bench_override}
-            continue
-
-        if lower == "c" or lower.startswith("c "):
-            if not current_symbol:
-                print("No active symbol. Enter a symbol first.", file=sys.stderr)
-                continue
-
-            # Swing chart mode shares grammar with table mode for consistency.
-            parsed, parse_error = _parse_swing_command_args(cmd.split()[1:], command_name="c")
-            if parse_error:
-                print(parse_error, file=sys.stderr)
-                continue
-            assert parsed is not None
-
-            bench_override, bench_error = _resolve_benchmark_override(parsed.benchmark_input)
-            if bench_error:
-                print(bench_error, file=sys.stderr)
+                _render_rebased_table(
+                    symbol=current_symbol,
+                    info=current_info,
+                    benchmark_symbol=bench_symbol,
+                    benchmark_label=bench_label,
+                    period_token=parsed.period_token,
+                    interval_override=parsed.interval_override,
+                )
+                last_view_kind = "table"
+                last_view_args = {
+                    "benchmark_symbol": bench_symbol,
+                    "benchmark_label": bench_label,
+                    "period_token": parsed.period_token,
+                    "interval_override": parsed.interval_override,
+                }
                 continue
 
-            _draw_chart(
-                current_symbol,
-                period=parsed.period_token,
-                interval=parsed.interval_override or _interval_for_chart_period(parsed.period_token),
-                height=height,
-                width=width,
-                info=current_info,
-                benchmark_override=bench_override,
-            )
-            last_view_kind = "chart"
-            last_view_args = {
-                "period": parsed.period_token,
-                "interval": parsed.interval_override or _interval_for_chart_period(parsed.period_token),
-                "benchmark_override": bench_override,
-            }
-            continue
+            if lower == "chart" or lower.startswith("chart "):
+                parts = cmd.split()
+                if len(parts) < 2:
+                    print("Usage: chart <swing|intra> ...", file=sys.stderr)
+                    continue
+                mode = parts[1].lower()
+                # Canonical router keeps legacy alias implementation as the single execution path.
+                if mode not in {"swing", "intra"}:
+                    print("Usage: chart <swing|intra> ...", file=sys.stderr)
+                    continue
+                alias = "c" if mode == "swing" else "cc"
+                tail = " ".join(parts[2:])
+                cmd = f"{alias} {tail}".strip()
+                lower = cmd.lower()
 
-        shortcut_period = _normalize_period_token(lower)
-        if shortcut_period is not None:
-            if not current_symbol:
-                print("No active symbol. Enter a symbol first.", file=sys.stderr)
+            if lower == "cc" or lower.startswith("cc "):
+                if not current_symbol:
+                    print("No active symbol. Enter a symbol first.", file=sys.stderr)
+                    continue
+
+                # Intraday mode is restricted to minute intervals and optional benchmark override.
+                parsed, parse_error = _parse_intraday_command_args(cmd.split()[1:])
+                if parse_error:
+                    print(parse_error, file=sys.stderr)
+                    continue
+                assert parsed is not None
+
+                bench_override, bench_error = _resolve_benchmark_override(parsed.benchmark_input)
+                if bench_error:
+                    print(bench_error, file=sys.stderr)
+                    continue
+
+                _draw_chart(
+                    current_symbol,
+                    period="1d",
+                    interval=parsed.interval,
+                    height=height,
+                    width=width,
+                    info=current_info,
+                    benchmark_override=bench_override,
+                )
+                last_view_kind = "intraday"
+                last_view_args = {"interval": parsed.interval, "benchmark_override": bench_override}
                 continue
-            # Bare period token is a convenience shortcut for swing chart.
-            interval = _interval_for_chart_period(shortcut_period)
-            _draw_chart(
-                current_symbol,
-                period=shortcut_period,
-                interval=interval,
-                height=height,
-                width=width,
-                info=current_info,
-            )
-            last_view_kind = "chart"
-            last_view_args = {"period": shortcut_period, "interval": interval, "benchmark_override": None}
-            continue
 
-        # Any other input is treated as a symbol switch.
-        # In index mode, keep index nicknames/index aliases in index space and skip equity fuzzy fallback.
-        if current_symbol and _is_known_index_symbol(current_symbol):
-            index_target = _index_alias_target(cmd)
-            if index_target is not None:
-                resolved_symbol, preloaded_info = _resolve_symbol(index_target)
-                current_symbol = resolved_symbol
-                # Index tickers can have sparse/empty `Ticker` payloads; backfill from grouped snapshot path.
-                if preloaded_info is None:
-                    preloaded_info = _index_quote_fallback_payload(current_symbol)
-                current_info = preloaded_info
-                # Symbol switch from watchlist mode returns control to symbol-mode prompt.
-                active_watchlist = None
-                if preloaded_info is not None:
-                    _print_quote(cmd.strip().upper(), current_symbol, include_after_hours=True, preloaded_info=current_info)
-                else:
+            if lower == "c" or lower.startswith("c "):
+                if not current_symbol:
+                    print("No active symbol. Enter a symbol first.", file=sys.stderr)
+                    continue
+
+                # Swing chart mode shares grammar with table mode for consistency.
+                parsed, parse_error = _parse_swing_command_args(cmd.split()[1:], command_name="c")
+                if parse_error:
+                    print(parse_error, file=sys.stderr)
+                    continue
+                assert parsed is not None
+
+                bench_override, bench_error = _resolve_benchmark_override(parsed.benchmark_input)
+                if bench_error:
+                    print(bench_error, file=sys.stderr)
+                    continue
+
+                _draw_chart(
+                    current_symbol,
+                    period=parsed.period_token,
+                    interval=parsed.interval_override or _interval_for_chart_period(parsed.period_token),
+                    height=height,
+                    width=width,
+                    info=current_info,
+                    benchmark_override=bench_override,
+                )
+                last_view_kind = "chart"
+                last_view_args = {
+                    "period": parsed.period_token,
+                    "interval": parsed.interval_override or _interval_for_chart_period(parsed.period_token),
+                    "benchmark_override": bench_override,
+                }
+                continue
+
+            shortcut_period = _normalize_period_token(lower)
+            if shortcut_period is not None:
+                if not current_symbol:
+                    print("No active symbol. Enter a symbol first.", file=sys.stderr)
+                    continue
+                # Bare period token is a convenience shortcut for swing chart.
+                interval = _interval_for_chart_period(shortcut_period)
+                _draw_chart(
+                    current_symbol,
+                    period=shortcut_period,
+                    interval=interval,
+                    height=height,
+                    width=width,
+                    info=current_info,
+                )
+                last_view_kind = "chart"
+                last_view_args = {"period": shortcut_period, "interval": interval, "benchmark_override": None}
+                continue
+
+            # Any other input is treated as a symbol switch.
+            # In index mode, keep index nicknames/index aliases in index space and skip equity fuzzy fallback.
+            if current_symbol and _is_known_index_symbol(current_symbol):
+                index_target = _index_alias_target(cmd)
+                if index_target is not None:
+                    resolved_symbol, preloaded_info = _resolve_symbol(index_target)
+                    current_symbol = resolved_symbol
+                    # Index tickers can have sparse/empty `Ticker` payloads; backfill from grouped snapshot path.
+                    if preloaded_info is None:
+                        preloaded_info = _index_quote_fallback_payload(current_symbol)
+                    current_info = preloaded_info
+                    # Symbol switch from watchlist mode returns control to symbol-mode prompt.
+                    active_watchlist = None
+                    if preloaded_info is not None:
+                        _print_quote(cmd.strip().upper(), current_symbol, include_after_hours=True, preloaded_info=current_info)
+                    else:
+                        print(f"Switched to index '{current_symbol}' (quote unavailable right now).", file=sys.stderr)
+                    last_view_kind = "quote"
+                    last_view_args = {}
+                    continue
+
+            resolved_symbol, preloaded_info = _resolve_symbol_with_fallback(cmd)
+            # Keep index quote behavior consistent outside index-mode alias branch.
+            if preloaded_info is None and _is_known_index_symbol(resolved_symbol):
+                preloaded_info = _index_quote_fallback_payload(resolved_symbol)
+            if preloaded_info is None:
+                # Key control-flow choice: preserve index context switch even when quote data is unavailable.
+                if _is_known_index_symbol(resolved_symbol):
+                    current_symbol = resolved_symbol
+                    current_info = None
+                    active_watchlist = None
                     print(f"Switched to index '{current_symbol}' (quote unavailable right now).", file=sys.stderr)
-                last_view_kind = "quote"
-                last_view_args = {}
+                    last_view_kind = "quote"
+                    last_view_args = {}
+                    continue
+                print(f"Could not fetch quote for '{cmd}'.", file=sys.stderr)
                 continue
-
-        resolved_symbol, preloaded_info = _resolve_symbol_with_fallback(cmd)
-        # Keep index quote behavior consistent outside index-mode alias branch.
-        if preloaded_info is None and _is_known_index_symbol(resolved_symbol):
-            preloaded_info = _index_quote_fallback_payload(resolved_symbol)
-        if preloaded_info is None:
-            # Key control-flow choice: preserve index context switch even when quote data is unavailable.
-            if _is_known_index_symbol(resolved_symbol):
-                current_symbol = resolved_symbol
-                current_info = None
-                active_watchlist = None
-                print(f"Switched to index '{current_symbol}' (quote unavailable right now).", file=sys.stderr)
-                last_view_kind = "quote"
-                last_view_args = {}
-                continue
-            print(f"Could not fetch quote for '{cmd}'.", file=sys.stderr)
+            current_symbol = resolved_symbol
+            current_info = preloaded_info
+            # Symbol switch from watchlist mode returns control to symbol-mode prompt.
+            active_watchlist = None
+            _print_quote(cmd.strip().upper(), current_symbol, include_after_hours=True, preloaded_info=current_info)
+            last_view_kind = "quote"
+            last_view_args = {}
+        except KeyboardInterrupt:
+            # Guardrail: stop transient progress cleanly and keep the REPL session alive.
+            _cancel_active_command()
             continue
-        current_symbol = resolved_symbol
-        current_info = preloaded_info
-        # Symbol switch from watchlist mode returns control to symbol-mode prompt.
-        active_watchlist = None
-        _print_quote(cmd.strip().upper(), current_symbol, include_after_hours=True, preloaded_info=current_info)
-        last_view_kind = "quote"
-        last_view_args = {}
 
 
 def main(argv: list[str] | None = None) -> int:
