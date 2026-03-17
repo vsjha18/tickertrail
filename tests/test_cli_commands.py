@@ -57,8 +57,9 @@ class HelperBehaviorTests(unittest.TestCase):
         tz, oh, om, ch, cm = cli._market_profile_for("RELIANCE.NS", {"currency": "INR"})
         self.assertEqual((oh, om, ch, cm), (9, 15, 15, 30))
         self.assertEqual(str(tz), "Asia/Kolkata")
-        self.assertEqual(cli._prompt_for_symbol("BEL.NS"), "tickertrail>bel> ")
-        self.assertEqual(cli._prompt_for_symbol("^NSEI"), "tickertrail>nsei> ")
+        self.assertEqual(cli._prompt_for_symbol("BEL.NS"), "tt>stock>bel> ")
+        self.assertEqual(cli._prompt_for_symbol("^NSEI"), "tt>index>nifty> ")
+        self.assertEqual(cli._prompt_for_context("^NSEI", "sharekhan"), "tt>watchlist>sharekhan> ")
 
     @patch("tickertrail.cli.yf.Ticker")
     def test_get_quote_payload_merge_and_fallbacks(self, mock_ticker):
@@ -1072,7 +1073,8 @@ class MainAndReplBehaviorTests(unittest.TestCase):
     @patch("tickertrail.cli._resolve_symbol_with_fallback", return_value=("AAPL", {"regularMarketPrice": 1.0}))
     @patch("tickertrail.cli._print_quote", return_value=0)
     @patch("tickertrail.cli._draw_chart", return_value=0)
-    def test_main_modes(self, mock_draw, mock_quote, _mock_resolve, mock_repl):
+    def test_main_routes_plain_symbol_quote_chart_and_repl_modes(self, mock_draw, mock_quote, _mock_resolve, mock_repl):
+        self.assertEqual(cli.main(["AAPL"]), 0)
         self.assertEqual(cli.main([]), 0)
         self.assertEqual(cli.main(["AAPL", "quote"]), 0)
         self.assertEqual(cli.main(["AAPL", "chart"]), 0)

@@ -15,9 +15,11 @@ Product contract:
 - Python CLI app, launched via `uv run tickertrail`.
 - If no args, start interactive REPL.
 - REPL prompt format:
-  - no active symbol: `tickertrail> `
-  - active symbol: `tickertrail><symbol_stem_lowercase>> `
-  - examples: `tickertrail>bel> `, `tickertrail>bankbaroda> `
+  - no active symbol: `tt> `
+  - stock context: `tt>stock><symbol_token>> `
+  - index context: `tt>index><index_token>> `
+  - watchlist context: `tt>watchlist><name>> `
+  - examples: `tt>stock>infy> `, `tt>index>bank> `, `tt>watchlist>sharekhan> `
 - Date format in user output: `dd-mm-yy`.
 
 Core commands:
@@ -43,7 +45,7 @@ Core commands:
 - `watchlist list` / `wl list`: list local watchlists.
 - `watchlist delete <name>` / `wl delete <name>`: delete local watchlist.
 - `watchlist merge <wl1> <wl2> <target>` / `wl merge <wl1> <wl2> <target>`: union two source watchlists into target (create target if missing; preserve stable de-dup order).
-- `watchlist open <name>` / `wl open <name>`: enter watchlist mode (prompt becomes `<name>> `).
+- `watchlist open <name>` / `wl open <name>`: enter watchlist mode (prompt becomes `tt>watchlist><name>> `).
 - `watchlist <name>` / `wl <name>`: shorthand for `watchlist open <name>`.
 - `watchlist`: exit watchlist mode.
 - bare `wl`: alias for `wl list`.
@@ -614,7 +616,10 @@ Keep it concise and factual.
 - Never infer `m` as month.
 - Keep user-facing formats stable once accepted.
 - If behavior changes, update help and tests in same patch.
-- REPL should tolerate pasted prompt fragments like `tickertrail>...> command` by extracting the trailing command token.
+- REPL should tolerate pasted prompt fragments like `tt>...> command` by extracting the trailing command token.
+- Keep REPL controller state explicit: active symbol/watchlist prompt context should move together, and last-view replay metadata should use typed state instead of ad-hoc string/dict pairs.
+- Grouped snapshot views (`index`, `snap`, watchlist snapshots, index fallback quote payloads) should use live quote fields when available, then fall back to intraday batch price/range, then daily-close batch data.
+- Daily analytics commands that depend on the latest point (`move`, `trend`, `relret`, and derived current-period calculations) should overlay the current live quote onto the last daily history point while the market is open; when the market is closed they should stay on EOD history/cache data.
 - Local CSV loaders (symbol universe/constituents) must handle `OSError` gracefully and fail soft.
 - For every command, print a final network footer line: total calls plus API breakdown (e.g. yfinance surfaces).
 - Footer must also include per-command history-cache stats (`hits` / `misses`) on the same line.

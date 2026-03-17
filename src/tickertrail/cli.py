@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from typing import Callable
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -243,6 +244,36 @@ _MOVES_DAYS_BY_PERIOD: dict[str, int] = {
 _ANALYTICS_PERIOD_HINT = "Nd|Nmo(<12)|Ny"
 _RUNTIME_CONFIG_CACHE: dict[str, float] | None = None
 _INDEX_BOARD_SYMBOLS: set[str] = {*(symbol.upper() for symbol, _ in _INDIA_INDEX_BOARD), *(symbol.upper() for symbol, _ in _GLOBAL_INDEX_BOARD)}
+_INDEX_PROMPT_LABELS: dict[str, str] = {
+    "^NSEI": "nifty",
+    "^NSEBANK": "bank",
+    "^CNXIT": "it",
+    "^CNXMIDCAP": "midcap",
+    "^NSEMDCP50": "midcapselect",
+    "^NIFTYNXT50": "next50",
+    "^CNXINFRA": "infra",
+    "^CNXPSE": "pse",
+    "^CNXAUTO": "auto",
+    "^CNXENERGY": "energy",
+    "^CNXDEFENCE": "defence",
+    "^CNXFMCG": "fmcg",
+    "^CNXMEDIA": "media",
+    "^CNXMETAL": "metal",
+    "^CNXMNC": "mnc",
+    "^CNXPHARMA": "pharma",
+    "^CNXPSUBANK": "psubank",
+    "^CNXREALTY": "realty",
+    "NIFTY_FIN_SERVICE.NS": "fin",
+    "^CNXCONSUM": "consumer",
+    "^INDIAVIX": "vix",
+    "^NSESMCP100": "smallcap",
+    "^FTSE": "ftse",
+    "^FCHI": "cac",
+    "^HSI": "hangseng",
+    "^N225": "nikkei",
+    "^IXIC": "nasdaq",
+    "^DJI": "dow",
+}
 
 
 def _read_conf_duration_seconds(payload: dict[str, Any], key: str) -> float:
@@ -328,6 +359,29 @@ class _ParsedCompareCommand:
     symbols: tuple[str, ...]
     period_token: str = "6mo"
     interval_override: str | None = None
+
+
+@dataclass(frozen=True)
+class _LastViewState:
+    """Typed replay state for the last non-quote REPL view."""
+
+    kind: Literal["chart", "intraday", "table", "compare"]
+    period_token: str | None = None
+    interval: str | None = None
+    benchmark_override: str | None = None
+    benchmark_symbol: str | None = None
+    benchmark_label: str | None = None
+    symbols: tuple[str, ...] = ()
+
+
+@dataclass
+class _ReplContext:
+    """Mutable REPL context for active symbol, prompt label, and watchlist mode."""
+
+    symbol: str | None
+    info: dict[str, Any] | None
+    prompt_label: str | None
+    watchlist_name: str | None = None
 
 
 def _load_watchlists() -> dict[str, list[str]]:
@@ -696,6 +750,79 @@ def _cancel_active_command() -> None:
     """Reset transient progress state after canceling an in-flight REPL command."""
     _progress_stop()
     print("Canceled current command.", file=sys.stderr)
+
+
+def _quote_payload_with_index_fallback(symbol: str) -> dict[str, Any]:
+    """Fetch quote payload for one active symbol, falling back for sparse index quotes."""
+    refreshed_info = _get_quote_payload(symbol)
+    if not _has_quote_data(refreshed_info) and _is_index_context_symbol(symbol):
+        fallback_info = _index_quote_fallback_payload(symbol)
+        if fallback_info is not None:
+            return fallback_info
+    return refreshed_info
+
+
+def _replay_last_view(
+    current_symbol: str,
+    current_info: dict[str, Any] | None,
+    last_view: _LastViewState | None,
+    width: int,
+    height: int,
+) -> None:
+    """Replay the last non-quote view after a successful quote refresh."""
+    if last_view is None:
+        return
+    if last_view.kind == "chart":
+        _draw_chart(
+            current_symbol,
+            period=last_view.period_token or "6mo",
+            interval=last_view.interval or "1d",
+            height=height,
+            width=width,
+            info=current_info,
+            benchmark_override=last_view.benchmark_override,
+        )
+        return
+    if last_view.kind == "intraday":
+        _draw_chart(
+            current_symbol,
+            period="1d",
+            interval=last_view.interval or "5m",
+            height=height,
+            width=width,
+            info=current_info,
+            benchmark_override=last_view.benchmark_override,
+        )
+        return
+    if last_view.kind == "table":
+        _render_rebased_table(
+            symbol=current_symbol,
+            info=current_info,
+            benchmark_symbol=last_view.benchmark_symbol,
+            benchmark_label=last_view.benchmark_label,
+            period_token=last_view.period_token or "6mo",
+            interval_override=last_view.interval,
+        )
+        return
+    if last_view.kind == "compare":
+        _render_compare_table(
+            symbol_inputs=list(last_view.symbols),
+            period_token=last_view.period_token or "6mo",
+            interval_override=last_view.interval,
+        )
+
+
+def _activate_symbol_context(
+    context: _ReplContext,
+    input_symbol: str | None,
+    resolved_symbol: str,
+    info: dict[str, Any] | None,
+) -> None:
+    """Switch the REPL to one symbol or index context and leave watchlist mode."""
+    context.symbol = resolved_symbol
+    context.info = info
+    context.prompt_label = _normalize_prompt_label(input_symbol) or _default_prompt_label_for_symbol(resolved_symbol)
+    context.watchlist_name = None
 
 
 @contextmanager
@@ -2505,23 +2632,51 @@ def _render_rebased_table(
     return 0
 
 
-def _prompt_for_symbol(symbol: str | None) -> str:
-    """Build the REPL prompt string from the active symbol."""
-    if symbol:
-        label = symbol.upper()
-        if label.startswith("^"):
-            label = label[1:]
-        if "." in label:
-            label = label.split(".", 1)[0]
-        return f"tickertrail>{label.lower()}> "
-    return "tickertrail> "
+def _normalize_prompt_label(label: str | None) -> str | None:
+    """Normalize one prompt label token to a compact lowercase path segment."""
+    if label is None:
+        return None
+    normalized = label.strip().lower()
+    if not normalized:
+        return None
+    if normalized.startswith("^"):
+        normalized = normalized[1:]
+    if "." in normalized:
+        normalized = normalized.split(".", 1)[0]
+    normalized = normalized.replace(" ", "")
+    return normalized or None
 
 
-def _prompt_for_context(symbol: str | None, watchlist_name: str | None) -> str:
-    """Build REPL prompt from active watchlist context or active symbol."""
+def _default_prompt_label_for_symbol(symbol: str | None) -> str | None:
+    """Return the default prompt label for one active stock or index symbol."""
+    if symbol is None:
+        return None
+    upper = symbol.strip().upper()
+    if not upper:
+        return None
+    if _is_index_context_symbol(upper):
+        normalized = _normalize_snap_index_symbol(upper)
+        return _INDEX_PROMPT_LABELS.get(normalized, _normalize_prompt_label(normalized))
+    return _normalize_prompt_label(upper)
+
+
+def _prompt_for_symbol(symbol: str | None, prompt_label: str | None = None) -> str:
+    """Build the REPL prompt string from the active stock or index symbol."""
+    if not symbol:
+        return "tt> "
+    scope = "index" if _is_index_context_symbol(symbol) else "stock"
+    label = _normalize_prompt_label(prompt_label) or _default_prompt_label_for_symbol(symbol)
+    if label is None:
+        return "tt> "
+    return f"tt>{scope}>{label}> "
+
+
+def _prompt_for_context(symbol: str | None, watchlist_name: str | None, prompt_label: str | None = None) -> str:
+    """Build REPL prompt from active watchlist context or active stock/index symbol."""
     if watchlist_name:
-        return f"{watchlist_name}> "
-    return _prompt_for_symbol(symbol)
+        label = _normalize_prompt_label(watchlist_name) or watchlist_name.strip().lower()
+        return f"tt>watchlist>{label}> "
+    return _prompt_for_symbol(symbol, prompt_label=prompt_label)
 
 
 def _print_watchlist_snapshot(watchlist_name: str) -> int:
@@ -2810,10 +2965,53 @@ def _period_return_from_closes(closes: list[float]) -> float | None:
     return ((last / first) - 1.0) * 100.0
 
 
+def _live_quote_payload_for_symbol(symbol: str) -> dict[str, Any]:
+    """Fetch one live quote payload for a stock or index symbol."""
+    if _is_index_context_symbol(symbol):
+        return _quote_payload_with_index_fallback(symbol)
+    return _get_quote_payload(symbol)
+
+
+def _overlay_live_market_price_on_closes(
+    symbol: str,
+    points: list[dt.datetime],
+    closes: list[float],
+) -> tuple[list[dt.datetime], list[float]]:
+    """Overlay the last close point with live price while the market is open."""
+    if not points or not closes:
+        return points, closes
+    # Guardrail: only bypass stale EOD/cache anchors while the relevant market is live.
+    if not _is_market_open_now(symbol, None):
+        return points, closes
+
+    live_info = _live_quote_payload_for_symbol(symbol)
+    if not _has_quote_data(live_info) or not _is_market_open_now(symbol, live_info):
+        return points, closes
+
+    live_price = _coerce_float(live_info.get("regularMarketPrice"))
+    if live_price is None:
+        return points, closes
+
+    tz, _oh, _om, _ch, _cm = _market_profile_for(symbol, live_info)
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    today_local = now_utc.astimezone(tz).date()
+    adjusted_points = list(points)
+    adjusted_closes = [float(close) for close in closes]
+    last_point = adjusted_points[-1]
+    if last_point.tzinfo is None:
+        last_point = last_point.replace(tzinfo=dt.timezone.utc)
+    if last_point.astimezone(tz).date() == today_local:
+        adjusted_closes[-1] = live_price
+        return adjusted_points, adjusted_closes
+    adjusted_points.append(now_utc)
+    adjusted_closes.append(live_price)
+    return adjusted_points, adjusted_closes
+
+
 def _close_series_for_period(symbol: str, period_token: str) -> tuple[list[dt.datetime], list[float]]:
     """Fetch one daily close series for period-level analytics commands."""
     points, closes = _fetch_close_points_for_token(symbol, period_token=period_token, interval="1d")
-    return points, closes
+    return _overlay_live_market_price_on_closes(symbol, points, closes)
 
 
 def _relret_benchmark_for_context(current_symbol: str | None, active_watchlist: str | None) -> tuple[str | None, str]:
@@ -3110,7 +3308,7 @@ def _print_moves_snapshot(
     rows: list[tuple[str, str, int | None, int]] = []
     lookback_days = max((days + 1) * 3, 30)
     for idx, symbol in enumerate(symbols):
-        _points, closes = _fetch_close_points_for_token(symbol, f"{lookback_days}d", "1d")
+        _points, closes = _close_series_for_period(symbol, f"{lookback_days}d")
         dots = quote_tools.recent_direction_dots_from_points(closes=closes, days=days, colorize=_colorize)
         green_days = _count_green_days_from_closes(closes=closes, days=days)
         rows.append((symbol, dots or "n/a", green_days, idx))
@@ -3130,7 +3328,7 @@ def _print_moves_snapshot(
 
 def _trend_score_for_symbol(symbol: str) -> tuple[float | None, float | None]:
     """Compute trend score tuple `(score, total)` for one symbol using current daily context."""
-    points, closes = _fetch_close_points_for_token(symbol, period_token="1y", interval="1d")
+    points, closes = _close_series_for_period(symbol, period_token="1y")
     if not closes:
         return None, None
     signal = quote_tools.quote_signal_snapshot(points=points, closes=closes, volumes=[])
@@ -3194,18 +3392,19 @@ def _run_repl(
 ) -> int:
     """Run interactive tickertrail session with quote/chart/table commands."""
     _enable_repl_history()
-    current_symbol = start_resolved_symbol
-    current_info = start_info
-    active_watchlist: str | None = None
-    last_view_kind = "quote" if current_symbol else None
-    last_view_args: dict[str, Any] = {}
+    context = _ReplContext(
+        symbol=start_resolved_symbol,
+        info=start_info,
+        prompt_label=_normalize_prompt_label(start_input_symbol) or _default_prompt_label_for_symbol(start_resolved_symbol),
+    )
+    last_view: _LastViewState | None = None
 
-    if current_symbol:
+    if context.symbol:
         code = _print_quote(
-            start_input_symbol or current_symbol,
-            current_symbol,
+            start_input_symbol or context.symbol,
+            context.symbol,
             include_after_hours=True,
-            preloaded_info=current_info,
+            preloaded_info=context.info,
         )
         if code != 0:
             return code
@@ -3853,7 +4052,7 @@ def _run_repl(
                 command="watchlist open",
                 aliases=["watchlist <name>", "wl open", "wl <name>"],
                 usage_lines=["watchlist open <name>", "watchlist <name>"],
-                detail_lines=["Enter watchlist mode; prompt changes to `<name>>`."],
+                detail_lines=["Enter watchlist mode; prompt changes to `tt>watchlist><name>>`."],
                 example_lines=["watchlist open swing", "wl swing"],
             )
             return
@@ -3927,7 +4126,7 @@ def _run_repl(
             _print_network_call_metrics()
             report_pending = False
         try:
-            raw = input(_prompt_for_context(current_symbol, active_watchlist))
+            raw = input(_prompt_for_context(context.symbol, context.watchlist_name, context.prompt_label))
         except EOFError:
             print()
             return 0
@@ -3936,8 +4135,8 @@ def _run_repl(
             return 0
 
         cmd = raw.strip()
-        # Users sometimes paste prompt fragments (e.g. `tickertrail>cnxit> snap`); keep last command token.
-        if ">" in cmd and cmd.lower().startswith("tickertrail>"):
+        # Users sometimes paste prompt fragments (for example `tt>index>bank> snap`); keep last command token.
+        if ">" in cmd and (cmd.lower().startswith("tt>") or cmd.lower().startswith("tickertrail>")):
             cmd = cmd.split(">")[-1].strip()
         if not cmd:
             continue
@@ -3955,24 +4154,18 @@ def _run_repl(
                 if lower.startswith("quote ") or (lower.startswith("q ") and lower != "q"):
                     print("Usage: quote", file=sys.stderr)
                     continue
-                if active_watchlist:
+                if context.watchlist_name:
                     print("quote is unavailable in watchlist mode. Exit watchlist mode first.", file=sys.stderr)
                     continue
-                if not current_symbol:
+                if not context.symbol:
                     print("No active symbol. Enter a symbol first.", file=sys.stderr)
                     continue
-                refreshed_info = _get_quote_payload(current_symbol)
-                if not _has_quote_data(refreshed_info) and _is_index_context_symbol(current_symbol):
-                    fallback_info = _index_quote_fallback_payload(current_symbol)
-                    if fallback_info is not None:
-                        refreshed_info = fallback_info
+                refreshed_info = _quote_payload_with_index_fallback(context.symbol)
                 if not _has_quote_data(refreshed_info):
-                    print(f"Could not fetch quote for '{current_symbol}'.", file=sys.stderr)
+                    print(f"Could not fetch quote for '{context.symbol}'.", file=sys.stderr)
                     continue
-                current_info = refreshed_info
-                _print_quote(current_symbol, current_symbol, include_after_hours=True, preloaded_info=current_info)
-                last_view_kind = "quote"
-                last_view_args = {}
+                context.info = refreshed_info
+                _print_quote(context.symbol, context.symbol, include_after_hours=True, preloaded_info=context.info)
                 continue
             if lower in {"h", "help"}:
                 _print_help(None)
@@ -4012,8 +4205,8 @@ def _run_repl(
                 lower = cmd.lower()
             if lower == "watchlist":
                 # Bare watchlist token exits watchlist mode and returns to symbol-mode prompt.
-                if active_watchlist is not None:
-                    active_watchlist = None
+                if context.watchlist_name is not None:
+                    context.watchlist_name = None
                     print("Watchlist mode exited.")
                 continue
             if lower.startswith("watchlist ") or lower.startswith("wl "):
@@ -4025,8 +4218,8 @@ def _run_repl(
                     if cmd_token == "wl":
                         args = ["list"]
                     else:
-                        if active_watchlist is not None:
-                            active_watchlist = None
+                        if context.watchlist_name is not None:
+                            context.watchlist_name = None
                             print("Watchlist mode exited.")
                         continue
                 sub = args[0].lower()
@@ -4062,8 +4255,8 @@ def _run_repl(
                         print(f"Usage: {cmd_token} delete <name>", file=sys.stderr)
                         continue
                     rc, msg = _delete_watchlist(args[1])
-                    if rc == 0 and active_watchlist == args[1]:
-                        active_watchlist = None
+                    if rc == 0 and context.watchlist_name == args[1]:
+                        context.watchlist_name = None
                     target = sys.stdout if rc == 0 else sys.stderr
                     print(msg, file=target)
                     continue
@@ -4092,52 +4285,24 @@ def _run_repl(
                 if symbols is None:
                     print(_watchlist_last_error() or f"Watchlist '{target_name}' not found.", file=sys.stderr)
                     continue
-                active_watchlist = target_name
+                context.watchlist_name = target_name
                 continue
             if lower in {"reload", "r", "refresh"}:
                 # Data refresh: always refresh quote, then replay last non-quote view.
-                if current_symbol:
-                    refreshed_info = _get_quote_payload(current_symbol)
+                if context.symbol:
+                    refreshed_info = _quote_payload_with_index_fallback(context.symbol)
                     if _has_quote_data(refreshed_info):
-                        current_info = refreshed_info
-                        _print_quote(current_symbol, current_symbol, include_after_hours=True, preloaded_info=current_info)
-                        if last_view_kind == "chart":
-                            _draw_chart(
-                                current_symbol,
-                                period=str(last_view_args.get("period", "6mo")),
-                                interval=str(last_view_args.get("interval", "1d")),
-                                height=height,
-                                width=width,
-                                info=current_info,
-                                benchmark_override=last_view_args.get("benchmark_override"),
-                            )
-                        elif last_view_kind == "intraday":
-                            _draw_chart(
-                                current_symbol,
-                                period="1d",
-                                interval=str(last_view_args.get("interval", "5m")),
-                                height=height,
-                                width=width,
-                                info=current_info,
-                                benchmark_override=last_view_args.get("benchmark_override"),
-                            )
-                        elif last_view_kind == "table":
-                            _render_rebased_table(
-                                symbol=current_symbol,
-                                info=current_info,
-                                benchmark_symbol=last_view_args.get("benchmark_symbol"),
-                                benchmark_label=last_view_args.get("benchmark_label"),
-                                period_token=str(last_view_args.get("period_token", "6mo")),
-                                interval_override=last_view_args.get("interval_override"),
-                            )
-                        elif last_view_kind == "compare":
-                            _render_compare_table(
-                                symbol_inputs=list(last_view_args.get("symbols", [])),
-                                period_token=str(last_view_args.get("period_token", "6mo")),
-                                interval_override=last_view_args.get("interval_override"),
-                            )
+                        context.info = refreshed_info
+                        _print_quote(context.symbol, context.symbol, include_after_hours=True, preloaded_info=context.info)
+                        _replay_last_view(
+                            current_symbol=context.symbol,
+                            current_info=context.info,
+                            last_view=last_view,
+                            width=width,
+                            height=height,
+                        )
                     else:
-                        print(f"Could not refresh quote for '{current_symbol}'.", file=sys.stderr)
+                        print(f"Could not refresh quote for '{context.symbol}'.", file=sys.stderr)
                 else:
                     print("No active symbol. Enter a symbol first.", file=sys.stderr)
                 continue
@@ -4158,13 +4323,13 @@ def _run_repl(
                 _print_symbol_news(cmd.split(maxsplit=1)[1].strip())
                 continue
             if lower == "snap":
-                if active_watchlist:
-                    _print_watchlist_snapshot(active_watchlist)
+                if context.watchlist_name:
+                    _print_watchlist_snapshot(context.watchlist_name)
                     continue
-                if not current_symbol:
+                if not context.symbol:
                     print("No active symbol. Enter an index symbol first.", file=sys.stderr)
                     continue
-                _print_index_constituent_snap(current_symbol)
+                _print_index_constituent_snap(context.symbol)
                 continue
             if lower == "move" or lower.startswith("move ") or lower == "moves" or lower.startswith("moves "):
                 parts = cmd.split()
@@ -4181,8 +4346,8 @@ def _run_repl(
                     continue
                 assert period_token is not None
                 _print_moves_snapshot(
-                    current_symbol=current_symbol,
-                    active_watchlist=active_watchlist,
+                    current_symbol=context.symbol,
+                    active_watchlist=context.watchlist_name,
                     period_token=period_token,
                     explicit_symbols=symbol_inputs,
                 )
@@ -4195,8 +4360,8 @@ def _run_repl(
                     print(parse_error, file=sys.stderr)
                     continue
                 _print_trend_snapshot(
-                    current_symbol=current_symbol,
-                    active_watchlist=active_watchlist,
+                    current_symbol=context.symbol,
+                    active_watchlist=context.watchlist_name,
                     explicit_symbols=symbol_inputs,
                 )
                 continue
@@ -4208,8 +4373,8 @@ def _run_repl(
                     continue
                 assert period_token is not None
                 _print_relret_snapshot(
-                    current_symbol=current_symbol,
-                    active_watchlist=active_watchlist,
+                    current_symbol=context.symbol,
+                    active_watchlist=context.watchlist_name,
                     period_token=period_token,
                     explicit_symbols=symbol_inputs,
                     benchmark_input=benchmark_input,
@@ -4228,65 +4393,65 @@ def _run_repl(
                     continue
                 assert period_token is not None
                 _print_corr_snapshot(
-                    current_symbol=current_symbol,
-                    active_watchlist=active_watchlist,
+                    current_symbol=context.symbol,
+                    active_watchlist=context.watchlist_name,
                     period_token=period_token,
                     explicit_symbols=symbol_inputs,
                 )
                 continue
-            if lower in {"list", "ll"} and active_watchlist:
-                symbols = _watchlist_symbols(active_watchlist)
+            if lower in {"list", "ll"} and context.watchlist_name:
+                symbols = _watchlist_symbols(context.watchlist_name)
                 if symbols is None:
-                    print(_watchlist_last_error() or f"Watchlist '{active_watchlist}' not found.", file=sys.stderr)
+                    print(_watchlist_last_error() or f"Watchlist '{context.watchlist_name}' not found.", file=sys.stderr)
                     continue
                 if not symbols:
-                    print(f"\n{active_watchlist} (0 symbols)")
+                    print(f"\n{context.watchlist_name} (0 symbols)")
                     continue
-                print(f"\n{active_watchlist} ({len(symbols)} symbols)")
+                print(f"\n{context.watchlist_name} ({len(symbols)} symbols)")
                 for idx, symbol in enumerate(symbols, start=1):
                     print(f"{idx:>2}. {symbol}")
                 continue
             if lower == "add" or lower.startswith("add "):
-                if not active_watchlist:
+                if not context.watchlist_name:
                     print("`add` is available only in watchlist mode.", file=sys.stderr)
                     continue
                 tokens = cmd.split()[1:]
                 if not tokens:
                     print("Usage: add <stock code> <stock code> ...", file=sys.stderr)
                     continue
-                rc, added, rejected, existing_symbols = _add_symbols_to_watchlist(active_watchlist, tokens)
+                rc, added, rejected, existing_symbols = _add_symbols_to_watchlist(context.watchlist_name, tokens)
                 if rc == 3:
                     print("Could not read watchlists database.", file=sys.stderr)
                     continue
                 if rc != 0:
-                    print(f"Watchlist '{active_watchlist}' not found.", file=sys.stderr)
+                    print(f"Watchlist '{context.watchlist_name}' not found.", file=sys.stderr)
                     continue
                 if added:
-                    print(f"Added to {active_watchlist}: {', '.join(added)}")
+                    print(f"Added to {context.watchlist_name}: {', '.join(added)}")
                 if existing_symbols:
-                    print(f"Already exists in {active_watchlist}: {', '.join(existing_symbols)}")
+                    print(f"Already exists in {context.watchlist_name}: {', '.join(existing_symbols)}")
                 if rejected:
                     print(f"Rejected (invalid code): {', '.join(rejected)}", file=sys.stderr)
                 if not added and not rejected and not existing_symbols:
                     print("No new symbols added.")
                 continue
             if lower == "delete" or lower.startswith("delete "):
-                if active_watchlist:
+                if context.watchlist_name:
                     tokens = cmd.split()[1:]
                     if not tokens:
                         print("Usage: delete <stock code> <stock code> ...", file=sys.stderr)
                         continue
-                    rc, removed, missing = _remove_symbols_from_watchlist(active_watchlist, tokens)
+                    rc, removed, missing = _remove_symbols_from_watchlist(context.watchlist_name, tokens)
                     if rc == 3:
                         print("Could not read watchlists database.", file=sys.stderr)
                         continue
                     if rc != 0:
-                        print(f"Watchlist '{active_watchlist}' not found.", file=sys.stderr)
+                        print(f"Watchlist '{context.watchlist_name}' not found.", file=sys.stderr)
                         continue
                     if removed:
-                        print(f"Deleted from {active_watchlist}: {', '.join(removed)}")
+                        print(f"Deleted from {context.watchlist_name}: {', '.join(removed)}")
                     if missing:
-                        print(f"Not present in {active_watchlist}: {', '.join(missing)}", file=sys.stderr)
+                        print(f"Not present in {context.watchlist_name}: {', '.join(missing)}", file=sys.stderr)
                     if not removed and not missing:
                         print("No symbols deleted.")
                     continue
@@ -4301,12 +4466,12 @@ def _run_repl(
                     period_token=parsed_compare.period_token,
                     interval_override=parsed_compare.interval_override,
                 )
-                last_view_kind = "compare"
-                last_view_args = {
-                    "symbols": list(parsed_compare.symbols),
-                    "period_token": parsed_compare.period_token,
-                    "interval_override": parsed_compare.interval_override,
-                }
+                last_view = _LastViewState(
+                    kind="compare",
+                    symbols=parsed_compare.symbols,
+                    period_token=parsed_compare.period_token,
+                    interval=parsed_compare.interval_override,
+                )
                 continue
 
             if lower == "table" or lower.startswith("table "):
@@ -4325,7 +4490,7 @@ def _run_repl(
                 lower = cmd.lower()
 
             if lower == "tt" or lower.startswith("tt "):
-                if not current_symbol:
+                if not context.symbol:
                     print("No active symbol. Enter a symbol first.", file=sys.stderr)
                     continue
 
@@ -4340,8 +4505,8 @@ def _run_repl(
                 benchmark_input = parsed_intraday.benchmark_input
 
                 bench_symbol, bench_label, bench_error = _resolve_benchmark_for_table(
-                    active_symbol=current_symbol,
-                    active_info=current_info,
+                    active_symbol=context.symbol,
+                    active_info=context.info,
                     benchmark_input=benchmark_input,
                 )
                 if bench_error:
@@ -4349,24 +4514,24 @@ def _run_repl(
                     continue
 
                 _render_rebased_table(
-                    symbol=current_symbol,
-                    info=current_info,
+                    symbol=context.symbol,
+                    info=context.info,
                     benchmark_symbol=bench_symbol,
                     benchmark_label=bench_label,
                     period_token=period_token,
                     interval_override=interval_override,
                 )
-                last_view_kind = "table"
-                last_view_args = {
-                    "benchmark_symbol": bench_symbol,
-                    "benchmark_label": bench_label,
-                    "period_token": period_token,
-                    "interval_override": interval_override,
-                }
+                last_view = _LastViewState(
+                    kind="table",
+                    period_token=period_token,
+                    interval=interval_override,
+                    benchmark_symbol=bench_symbol,
+                    benchmark_label=bench_label,
+                )
                 continue
 
             if lower == "t" or lower.startswith("t "):
-                if not current_symbol:
+                if not context.symbol:
                     print("No active symbol. Enter a symbol first.", file=sys.stderr)
                     continue
                 # Table mode: parse grammar first, then resolve benchmark symbol.
@@ -4377,8 +4542,8 @@ def _run_repl(
                 assert parsed is not None
 
                 bench_symbol, bench_label, bench_error = _resolve_benchmark_for_table(
-                    active_symbol=current_symbol,
-                    active_info=current_info,
+                    active_symbol=context.symbol,
+                    active_info=context.info,
                     benchmark_input=parsed.benchmark_input,
                 )
                 if bench_error:
@@ -4386,20 +4551,20 @@ def _run_repl(
                     continue
 
                 _render_rebased_table(
-                    symbol=current_symbol,
-                    info=current_info,
+                    symbol=context.symbol,
+                    info=context.info,
                     benchmark_symbol=bench_symbol,
                     benchmark_label=bench_label,
                     period_token=parsed.period_token,
                     interval_override=parsed.interval_override,
                 )
-                last_view_kind = "table"
-                last_view_args = {
-                    "benchmark_symbol": bench_symbol,
-                    "benchmark_label": bench_label,
-                    "period_token": parsed.period_token,
-                    "interval_override": parsed.interval_override,
-                }
+                last_view = _LastViewState(
+                    kind="table",
+                    period_token=parsed.period_token,
+                    interval=parsed.interval_override,
+                    benchmark_symbol=bench_symbol,
+                    benchmark_label=bench_label,
+                )
                 continue
 
             if lower == "chart" or lower.startswith("chart "):
@@ -4418,7 +4583,7 @@ def _run_repl(
                 lower = cmd.lower()
 
             if lower == "cc" or lower.startswith("cc "):
-                if not current_symbol:
+                if not context.symbol:
                     print("No active symbol. Enter a symbol first.", file=sys.stderr)
                     continue
 
@@ -4435,20 +4600,19 @@ def _run_repl(
                     continue
 
                 _draw_chart(
-                    current_symbol,
+                    context.symbol,
                     period="1d",
                     interval=parsed.interval,
                     height=height,
                     width=width,
-                    info=current_info,
+                    info=context.info,
                     benchmark_override=bench_override,
                 )
-                last_view_kind = "intraday"
-                last_view_args = {"interval": parsed.interval, "benchmark_override": bench_override}
+                last_view = _LastViewState(kind="intraday", interval=parsed.interval, benchmark_override=bench_override)
                 continue
 
             if lower == "c" or lower.startswith("c "):
-                if not current_symbol:
+                if not context.symbol:
                     print("No active symbol. Enter a symbol first.", file=sys.stderr)
                     continue
 
@@ -4465,60 +4629,56 @@ def _run_repl(
                     continue
 
                 _draw_chart(
-                    current_symbol,
+                    context.symbol,
                     period=parsed.period_token,
                     interval=parsed.interval_override or _interval_for_chart_period(parsed.period_token),
                     height=height,
                     width=width,
-                    info=current_info,
+                    info=context.info,
                     benchmark_override=bench_override,
                 )
-                last_view_kind = "chart"
-                last_view_args = {
-                    "period": parsed.period_token,
-                    "interval": parsed.interval_override or _interval_for_chart_period(parsed.period_token),
-                    "benchmark_override": bench_override,
-                }
+                last_view = _LastViewState(
+                    kind="chart",
+                    period_token=parsed.period_token,
+                    interval=parsed.interval_override or _interval_for_chart_period(parsed.period_token),
+                    benchmark_override=bench_override,
+                )
                 continue
 
             shortcut_period = _normalize_period_token(lower)
             if shortcut_period is not None:
-                if not current_symbol:
+                if not context.symbol:
                     print("No active symbol. Enter a symbol first.", file=sys.stderr)
                     continue
                 # Bare period token is a convenience shortcut for swing chart.
                 interval = _interval_for_chart_period(shortcut_period)
                 _draw_chart(
-                    current_symbol,
+                    context.symbol,
                     period=shortcut_period,
                     interval=interval,
                     height=height,
                     width=width,
-                    info=current_info,
+                    info=context.info,
                 )
-                last_view_kind = "chart"
-                last_view_args = {"period": shortcut_period, "interval": interval, "benchmark_override": None}
+                last_view = _LastViewState(kind="chart", period_token=shortcut_period, interval=interval)
                 continue
 
             # Any other input is treated as a symbol switch.
             # In index mode, keep index nicknames/index aliases in index space and skip equity fuzzy fallback.
-            if current_symbol and _is_known_index_symbol(current_symbol):
+            if context.symbol and _is_known_index_symbol(context.symbol):
                 index_target = _index_alias_target(cmd)
                 if index_target is not None:
                     resolved_symbol, preloaded_info = _resolve_symbol(index_target)
-                    current_symbol = resolved_symbol
+                    # Keep symbol activation centralized so prompt-label and watchlist resets stay in sync.
+                    _activate_symbol_context(context, cmd, resolved_symbol, preloaded_info)
                     # Index tickers can have sparse/empty `Ticker` payloads; backfill from grouped snapshot path.
-                    if preloaded_info is None:
-                        preloaded_info = _index_quote_fallback_payload(current_symbol)
-                    current_info = preloaded_info
-                    # Symbol switch from watchlist mode returns control to symbol-mode prompt.
-                    active_watchlist = None
-                    if preloaded_info is not None:
-                        _print_quote(cmd.strip().upper(), current_symbol, include_after_hours=True, preloaded_info=current_info)
+                    if context.info is None and context.symbol is not None:
+                        context.info = _index_quote_fallback_payload(context.symbol)
+                    if context.info is not None and context.symbol is not None:
+                        _print_quote(cmd.strip().upper(), context.symbol, include_after_hours=True, preloaded_info=context.info)
                     else:
-                        print(f"Switched to index '{current_symbol}' (quote unavailable right now).", file=sys.stderr)
-                    last_view_kind = "quote"
-                    last_view_args = {}
+                        print(f"Switched to index '{context.symbol}' (quote unavailable right now).", file=sys.stderr)
+                    last_view = None
                     continue
 
             resolved_symbol, preloaded_info = _resolve_symbol_with_fallback(cmd)
@@ -4528,22 +4688,15 @@ def _run_repl(
             if preloaded_info is None:
                 # Key control-flow choice: preserve index context switch even when quote data is unavailable.
                 if _is_known_index_symbol(resolved_symbol):
-                    current_symbol = resolved_symbol
-                    current_info = None
-                    active_watchlist = None
-                    print(f"Switched to index '{current_symbol}' (quote unavailable right now).", file=sys.stderr)
-                    last_view_kind = "quote"
-                    last_view_args = {}
+                    _activate_symbol_context(context, cmd, resolved_symbol, None)
+                    print(f"Switched to index '{context.symbol}' (quote unavailable right now).", file=sys.stderr)
+                    last_view = None
                     continue
                 print(f"Could not fetch quote for '{cmd}'.", file=sys.stderr)
                 continue
-            current_symbol = resolved_symbol
-            current_info = preloaded_info
-            # Symbol switch from watchlist mode returns control to symbol-mode prompt.
-            active_watchlist = None
-            _print_quote(cmd.strip().upper(), current_symbol, include_after_hours=True, preloaded_info=current_info)
-            last_view_kind = "quote"
-            last_view_args = {}
+            _activate_symbol_context(context, cmd, resolved_symbol, preloaded_info)
+            _print_quote(cmd.strip().upper(), context.symbol, include_after_hours=True, preloaded_info=context.info)
+            last_view = None
         except KeyboardInterrupt:
             # Guardrail: stop transient progress cleanly and keep the REPL session alive.
             _cancel_active_command()

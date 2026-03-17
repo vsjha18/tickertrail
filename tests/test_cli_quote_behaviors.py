@@ -9,6 +9,18 @@ from tickertrail.cli import (
 )
 
 
+def _run_repl_session(*commands: str, start_symbol: str | None = None, start_resolved_symbol: str | None = None, start_info=None) -> int:
+    """Run one REPL session for quote-behavior tests with optional active-symbol state."""
+    with patch("builtins.input", side_effect=list(commands)):
+        return _run_repl(
+            start_input_symbol=start_symbol,
+            start_resolved_symbol=start_resolved_symbol,
+            start_info=start_info,
+            width=100,
+            height=22,
+        )
+
+
 class ParserNoNetworkGuardTests(unittest.TestCase):
     @patch("tickertrail.cli.yf.Ticker", side_effect=AssertionError("network call not allowed"))
     @patch("tickertrail.cli.yf.download", side_effect=AssertionError("network call not allowed"))
@@ -34,35 +46,27 @@ class ReplNoNetworkBehaviorTests(unittest.TestCase):
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._resolve_symbol_with_fallback", side_effect=AssertionError("symbol resolution must not run"))
     def test_cls_does_not_trigger_symbol_resolution(self, _mock_resolve, _mock_history) -> None:
-        with patch("builtins.input", side_effect=["cls", "exit"]):
-            rc = _run_repl(
-                start_input_symbol=None,
-                start_resolved_symbol=None,
-                start_info=None,
-                width=100,
-                height=22,
-            )
+        rc = _run_repl_session("cls", "exit")
         self.assertEqual(rc, 0)
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._print_quote", return_value=0)
     @patch("tickertrail.cli._resolve_benchmark_for_table", return_value=("^NSEI", "NIFTY 50", None))
     @patch("tickertrail.cli._render_rebased_table", return_value=0)
-    def test_tt_default_uses_intraday_defaults(
+    def test_tt_defaults_to_intraday_table_defaults(
         self,
         mock_render_table,
         _mock_resolve_bench,
         _mock_print_quote,
         _mock_history,
     ) -> None:
-        with patch("builtins.input", side_effect=["tt", "exit"]):
-            rc = _run_repl(
-                start_input_symbol="BEL",
-                start_resolved_symbol="BEL.NS",
-                start_info={"regularMarketPrice": 100.0, "regularMarketPreviousClose": 99.0},
-                width=100,
-                height=22,
-            )
+        rc = _run_repl_session(
+            "tt",
+            "exit",
+            start_symbol="BEL",
+            start_resolved_symbol="BEL.NS",
+            start_info={"regularMarketPrice": 100.0, "regularMarketPreviousClose": 99.0},
+        )
         self.assertEqual(rc, 0)
         self.assertEqual(mock_render_table.call_count, 1)
         kwargs = mock_render_table.call_args.kwargs
@@ -73,21 +77,20 @@ class ReplNoNetworkBehaviorTests(unittest.TestCase):
     @patch("tickertrail.cli._print_quote", return_value=0)
     @patch("tickertrail.cli._resolve_benchmark_for_table", return_value=("SBIN.NS", "STATE BANK OF INDIA", None))
     @patch("tickertrail.cli._render_rebased_table", return_value=0)
-    def test_tt_symbol_only_keeps_intraday_and_sets_benchmark(
+    def test_tt_benchmark_token_keeps_intraday_defaults(
         self,
         mock_render_table,
         mock_resolve_bench,
         _mock_print_quote,
         _mock_history,
     ) -> None:
-        with patch("builtins.input", side_effect=["tt sbin", "exit"]):
-            rc = _run_repl(
-                start_input_symbol="HDFCBANK",
-                start_resolved_symbol="HDFCBANK.NS",
-                start_info={"regularMarketPrice": 100.0, "regularMarketPreviousClose": 99.0},
-                width=100,
-                height=22,
-            )
+        rc = _run_repl_session(
+            "tt sbin",
+            "exit",
+            start_symbol="HDFCBANK",
+            start_resolved_symbol="HDFCBANK.NS",
+            start_info={"regularMarketPrice": 100.0, "regularMarketPreviousClose": 99.0},
+        )
         self.assertEqual(rc, 0)
         self.assertEqual(mock_render_table.call_count, 1)
         self.assertEqual(mock_resolve_bench.call_args.kwargs["benchmark_input"], "sbin")
@@ -99,21 +102,20 @@ class ReplNoNetworkBehaviorTests(unittest.TestCase):
     @patch("tickertrail.cli._print_quote", return_value=0)
     @patch("tickertrail.cli._resolve_benchmark_for_table", return_value=("^NSEI", "NIFTY 50", None))
     @patch("tickertrail.cli._render_rebased_table", return_value=0)
-    def test_tt_dash_allows_explicit_intraday_bin(
+    def test_tt_dash_override_changes_intraday_bin(
         self,
         mock_render_table,
         _mock_resolve_bench,
         _mock_print_quote,
         _mock_history,
     ) -> None:
-        with patch("builtins.input", side_effect=["tt - 15m", "exit"]):
-            rc = _run_repl(
-                start_input_symbol="BEL",
-                start_resolved_symbol="BEL.NS",
-                start_info={"regularMarketPrice": 100.0, "regularMarketPreviousClose": 99.0},
-                width=100,
-                height=22,
-            )
+        rc = _run_repl_session(
+            "tt - 15m",
+            "exit",
+            start_symbol="BEL",
+            start_resolved_symbol="BEL.NS",
+            start_info={"regularMarketPrice": 100.0, "regularMarketPreviousClose": 99.0},
+        )
         self.assertEqual(rc, 0)
         kwargs = mock_render_table.call_args.kwargs
         self.assertEqual(kwargs["period_token"], "1d")
@@ -121,15 +123,8 @@ class ReplNoNetworkBehaviorTests(unittest.TestCase):
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._get_quote_payload", side_effect=AssertionError("network call not expected"))
-    def test_reload_without_active_symbol_does_not_fetch(self, _mock_get_quote, _mock_history) -> None:
-        with patch("builtins.input", side_effect=["reload", "exit"]):
-            rc = _run_repl(
-                start_input_symbol=None,
-                start_resolved_symbol=None,
-                start_info=None,
-                width=100,
-                height=22,
-            )
+    def test_reload_without_active_symbol_skips_quote_fetch(self, _mock_get_quote, _mock_history) -> None:
+        rc = _run_repl_session("reload", "exit")
         self.assertEqual(rc, 0)
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
@@ -147,14 +142,14 @@ class ReplNoNetworkBehaviorTests(unittest.TestCase):
         _mock_print_quote,
         _mock_history,
     ) -> None:
-        with patch("builtins.input", side_effect=["t", "reload", "exit"]):
-            rc = _run_repl(
-                start_input_symbol="BEL",
-                start_resolved_symbol="BEL.NS",
-                start_info={"regularMarketPrice": 100.0, "regularMarketPreviousClose": 99.0},
-                width=100,
-                height=22,
-            )
+        rc = _run_repl_session(
+            "t",
+            "reload",
+            "exit",
+            start_symbol="BEL",
+            start_resolved_symbol="BEL.NS",
+            start_info={"regularMarketPrice": 100.0, "regularMarketPreviousClose": 99.0},
+        )
         self.assertEqual(rc, 0)
         self.assertEqual(mock_render_table.call_count, 2)
 

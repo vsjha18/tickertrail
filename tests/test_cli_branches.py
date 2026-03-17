@@ -102,6 +102,38 @@ class BranchHelperTests(unittest.TestCase):
         mock_stop.assert_called_once_with()
         self.assertIn("Canceled current command.", err.getvalue())
 
+    @patch("tickertrail.cli._index_quote_fallback_payload", return_value={"regularMarketPrice": 1.0})
+    @patch("tickertrail.cli._is_index_context_symbol", return_value=True)
+    @patch("tickertrail.cli._has_quote_data", return_value=False)
+    @patch("tickertrail.cli._get_quote_payload", return_value={})
+    def test_quote_payload_with_index_fallback_uses_index_snapshot_backfill(
+        self,
+        mock_get_quote,
+        _mock_has_data,
+        _mock_is_index,
+        mock_fallback,
+    ):
+        payload = cli._quote_payload_with_index_fallback("^CNXIT")
+        self.assertEqual(payload, {"regularMarketPrice": 1.0})
+        mock_get_quote.assert_called_once_with("^CNXIT")
+        mock_fallback.assert_called_once_with("^CNXIT")
+
+    @patch("tickertrail.cli._index_quote_fallback_payload")
+    @patch("tickertrail.cli._is_index_context_symbol", return_value=False)
+    @patch("tickertrail.cli._has_quote_data", return_value=True)
+    @patch("tickertrail.cli._get_quote_payload", return_value={"regularMarketPrice": 2.0})
+    def test_quote_payload_with_index_fallback_keeps_usable_quote_payload(
+        self,
+        mock_get_quote,
+        _mock_has_data,
+        _mock_is_index,
+        mock_fallback,
+    ):
+        payload = cli._quote_payload_with_index_fallback("BEL.NS")
+        self.assertEqual(payload, {"regularMarketPrice": 2.0})
+        mock_get_quote.assert_called_once_with("BEL.NS")
+        mock_fallback.assert_not_called()
+
     @patch("tickertrail.cli.time.sleep")
     @patch("tickertrail.cli.random.uniform", return_value=0.015)
     def test_ticker_fallback_pause_includes_jitter_and_backoff(self, mock_uniform, mock_sleep):
@@ -198,6 +230,24 @@ class BranchHelperTests(unittest.TestCase):
         mock_start.assert_called_once_with("Resolving snap rows")
         mock_stop.assert_called_once()
 
+    @patch(
+        "tickertrail.cli._get_quote_payload",
+        return_value={
+            "regularMarketPrice": 10.5,
+            "regularMarketPreviousClose": 9.0,
+            "regularMarketDayLow": 9.8,
+            "regularMarketDayHigh": 10.7,
+        },
+    )
+    @patch("tickertrail.cli._has_quote_data", return_value=True)
+    @patch("tickertrail.cli._batch_index_snapshots", return_value={"A.NS": {"regularMarketPrice": 10.0, "regularMarketPreviousClose": 9.0}})
+    def test_fetch_group_snapshots_overlays_live_quote_on_batch_price(self, _mock_batch, _mock_has, _mock_quote):
+        snaps, passes = cli._fetch_group_snapshots_with_retries(["A.NS"])
+        self.assertEqual(passes, 1)
+        self.assertEqual(snaps["A.NS"]["regularMarketPrice"], 10.5)
+        self.assertEqual(snaps["A.NS"]["regularMarketDayLow"], 9.8)
+        self.assertEqual(snaps["A.NS"]["regularMarketDayHigh"], 10.7)
+
     @patch("tickertrail.cli._progress_stop")
     @patch("tickertrail.cli._progress_start")
     @patch("tickertrail.cli._batch_index_snapshots", return_value={"^NSEI": {"regularMarketPrice": 10.0}})
@@ -207,6 +257,48 @@ class BranchHelperTests(unittest.TestCase):
         self.assertIn("^NSEI", out)
         mock_start.assert_called_once_with("Resolving index board")
         mock_stop.assert_called_once()
+
+    @patch("tickertrail.cli._get_quote_payload", return_value={"regularMarketPrice": 11.0, "regularMarketPreviousClose": 9.5})
+    @patch("tickertrail.cli._has_quote_data", return_value=True)
+    @patch("tickertrail.cli._batch_index_snapshots", return_value={"^NSEI": {"regularMarketPrice": 10.0, "regularMarketPreviousClose": 9.0}})
+    def test_resolve_group_candidate_snapshots_overlays_live_quote_on_chosen_rows(
+        self,
+        _mock_batch,
+        _mock_has,
+        _mock_quote,
+    ):
+        out, passes = cli._resolve_group_candidate_snapshots({"^NSEI": ["^NSEI"]})
+        self.assertEqual(passes, 1)
+        self.assertEqual(out["^NSEI"][1]["regularMarketPrice"], 11.0)
+        self.assertEqual(out["^NSEI"][1]["regularMarketPreviousClose"], 9.5)
+
+    @patch("tickertrail.cli._render_compare_table", return_value=0)
+    def test_replay_last_view_replays_compare_with_saved_args(self, mock_compare):
+        cli._replay_last_view(
+            current_symbol="BEL.NS",
+            current_info={"regularMarketPrice": 1.0},
+            last_view=cli._LastViewState(kind="compare", symbols=("AAPL", "MSFT"), period_token="1y", interval="1wk"),
+            width=90,
+            height=20,
+        )
+        mock_compare.assert_called_once_with(
+            symbol_inputs=["AAPL", "MSFT"],
+            period_token="1y",
+            interval_override="1wk",
+        )
+
+    def test_activate_symbol_context_resets_watchlist_and_updates_prompt_label(self):
+        context = cli._ReplContext(symbol="BEL.NS", info={"regularMarketPrice": 1.0}, prompt_label="bel", watchlist_name="swing")
+        cli._activate_symbol_context(
+            context,
+            input_symbol="bank",
+            resolved_symbol="^NSEBANK",
+            info={"regularMarketPrice": 2.0},
+        )
+        self.assertEqual(context.symbol, "^NSEBANK")
+        self.assertEqual(context.info, {"regularMarketPrice": 2.0})
+        self.assertEqual(context.prompt_label, "bank")
+        self.assertIsNone(context.watchlist_name)
 
     def test_sign_and_range_extra_edges(self):
         self.assertEqual(cli._color_by_sign(-1.0, plus_is_green=False), "green")
@@ -657,13 +749,74 @@ class BranchHelperTests(unittest.TestCase):
         self.assertEqual(cli._parse_corr_period(["1mo", "3mo"])[0], None)
         self.assertEqual(cli._moves_days_for_period("custom"), 30)
 
+    @patch("tickertrail.cli._is_market_open_now", return_value=False)
     @patch("tickertrail.cli._fetch_close_points_for_token", return_value=([dt.datetime(2026, 1, 1)], [100.0]))
-    def test_close_series_for_period_wrapper(self, mock_fetch):
+    def test_close_series_for_period_wrapper(self, mock_fetch, _mock_market_open):
         points, closes = cli._close_series_for_period("A.NS", "1mo")
         self.assertEqual(points, [dt.datetime(2026, 1, 1)])
         self.assertEqual(closes, [100.0])
         self.assertEqual(mock_fetch.call_args.kwargs["period_token"], "1mo")
         self.assertEqual(mock_fetch.call_args.kwargs["interval"], "1d")
+
+    @patch("tickertrail.cli._live_quote_payload_for_symbol", return_value={"regularMarketPrice": 105.0})
+    @patch("tickertrail.cli._has_quote_data", return_value=True)
+    @patch("tickertrail.cli._market_profile_for", return_value=(dt.timezone.utc, 9, 15, 15, 30))
+    @patch("tickertrail.cli._is_market_open_now", return_value=True)
+    def test_close_series_for_period_overlays_live_price_while_market_is_open(
+        self,
+        _mock_market_open,
+        _mock_profile,
+        _mock_has_data,
+        _mock_live_quote,
+    ):
+        points = [dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc), dt.datetime(2026, 1, 2, tzinfo=dt.timezone.utc)]
+        closes = [100.0, 101.0]
+        fake_now = dt.datetime(2026, 1, 2, 10, 0, tzinfo=dt.timezone.utc)
+
+        class FakeDateTime(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is None:
+                    return fake_now.replace(tzinfo=None)
+                return fake_now.astimezone(tz)
+
+        with (
+            patch("tickertrail.cli._fetch_close_points_for_token", return_value=(points, closes)),
+            patch("tickertrail.cli.dt.datetime", FakeDateTime),
+        ):
+            adjusted_points, adjusted_closes = cli._close_series_for_period("A.NS", "1mo")
+        self.assertEqual(adjusted_points, points)
+        self.assertEqual(adjusted_closes[-1], 105.0)
+
+    @patch("tickertrail.cli._live_quote_payload_for_symbol", return_value={"regularMarketPrice": 105.0})
+    @patch("tickertrail.cli._has_quote_data", return_value=True)
+    @patch("tickertrail.cli._market_profile_for", return_value=(dt.timezone.utc, 9, 15, 15, 30))
+    @patch("tickertrail.cli._is_market_open_now", return_value=True)
+    def test_close_series_for_period_appends_live_price_when_today_bar_missing(
+        self,
+        _mock_market_open,
+        _mock_profile,
+        _mock_has_data,
+        _mock_live_quote,
+    ):
+        points = [dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)]
+        closes = [100.0]
+        fake_now = dt.datetime(2026, 1, 2, 10, 0, tzinfo=dt.timezone.utc)
+
+        class FakeDateTime(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is None:
+                    return fake_now.replace(tzinfo=None)
+                return fake_now.astimezone(tz)
+
+        with (
+            patch("tickertrail.cli._fetch_close_points_for_token", return_value=(points, closes)),
+            patch("tickertrail.cli.dt.datetime", FakeDateTime),
+        ):
+            adjusted_points, adjusted_closes = cli._close_series_for_period("A.NS", "1mo")
+        self.assertEqual(len(adjusted_points), 2)
+        self.assertEqual(adjusted_closes[-1], 105.0)
 
     @patch("tickertrail.cli._close_series_for_period")
     def test_daily_return_series_for_period_success(self, mock_close):
@@ -789,9 +942,10 @@ class BranchHelperTests(unittest.TestCase):
         dots = cli._recent_direction_dots("X", days=10)
         self.assertEqual(dots, "GGGGGGGGGG")
 
+    @patch("tickertrail.cli._is_market_open_now", return_value=False)
     @patch("tickertrail.cli._fetch_close_points_for_token")
-    def test_print_moves_snapshot_sorts_by_green_days_desc(self, mock_fetch):
-        def side_effect(symbol, _period, _interval):
+    def test_print_moves_snapshot_sorts_by_green_days_desc(self, mock_fetch, _mock_market_open):
+        def side_effect(symbol, period_token=None, interval=None):
             data = {
                 "A.NS": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],  # 7 green
                 "B.NS": [1.0, 2.0, 1.0, 2.0, 3.0, 2.0, 3.0, 4.0],  # 5 green
@@ -817,8 +971,9 @@ class BranchHelperTests(unittest.TestCase):
         self.assertLess(txt.index("A.NS"), txt.index("B.NS"))
         self.assertLess(txt.index("B.NS"), txt.index("C.NS"))
 
+    @patch("tickertrail.cli._is_market_open_now", return_value=False)
     @patch("tickertrail.cli._fetch_close_points_for_token", return_value=([], [1.0, 2.0, 3.0, 4.0]))
-    def test_print_moves_snapshot_index_without_universe_falls_back_to_index_symbol(self, _mock_fetch):
+    def test_print_moves_snapshot_index_without_universe_falls_back_to_index_symbol(self, _mock_fetch, _mock_market_open):
         with (
             patch("tickertrail.cli._is_known_index_symbol", return_value=True),
             patch("tickertrail.cli._snap_universe_for_symbol", return_value=None),
@@ -829,9 +984,10 @@ class BranchHelperTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("^IXIC", txt)
 
+    @patch("tickertrail.cli._is_market_open_now", return_value=False)
     @patch("tickertrail.cli._fetch_close_points_for_token", return_value=([], [1.0, 2.0, 3.0, 4.0]))
     @patch("tickertrail.cli._resolve_analytics_symbol_inputs", return_value=["INFY.NS", "TCS.NS"])
-    def test_print_moves_snapshot_explicit_symbols_override_context(self, _mock_resolve, _mock_fetch):
+    def test_print_moves_snapshot_explicit_symbols_override_context(self, _mock_resolve, _mock_fetch, _mock_market_open):
         with patch("sys.stdout", new_callable=io.StringIO) as out:
             rc = cli._print_moves_snapshot(current_symbol="^NSEI", active_watchlist="swing", period_token="1mo", explicit_symbols=["infy", "tcs"])
         self.assertEqual(rc, 0)
@@ -1161,8 +1317,9 @@ class BranchHelperTests(unittest.TestCase):
         self.assertEqual(mock_trend.call_count, 2)
         self.assertEqual(mock_trend.call_args_list[1].kwargs["explicit_symbols"], ["infy", "tcs"])
 
+    @patch("tickertrail.cli._is_market_open_now", return_value=False)
     @patch("tickertrail.cli._fetch_close_points_for_token")
-    def test_print_trend_snapshot_index_without_universe_falls_back_to_index_symbol(self, mock_fetch):
+    def test_print_trend_snapshot_index_without_universe_falls_back_to_index_symbol(self, mock_fetch, _mock_market_open):
         tz = dt.timezone.utc
         points = [dt.datetime(2026, 1, 1, tzinfo=tz) + dt.timedelta(days=i) for i in range(230)]
         closes = [100.0 + float(i) for i in range(230)]
@@ -1315,7 +1472,7 @@ class BranchHelperTests(unittest.TestCase):
         self.assertTrue(mock_quote.called)
 
     @patch("tickertrail.cli.yf.download")
-    def test_batch_index_snapshots_daily_fallbacks(self, mock_dl):
+    def test_batch_index_snapshots_prefers_intraday_price_and_range_with_daily_prev_close(self, mock_dl):
         idx_d = pd.date_range("2026-02-10", periods=2, freq="D", tz="UTC")
         daily_df = pd.DataFrame(
             {
@@ -1325,9 +1482,37 @@ class BranchHelperTests(unittest.TestCase):
             },
             index=idx_d,
         )
-        mock_dl.return_value = daily_df
+        idx_i = pd.date_range("2026-02-11 09:15", periods=3, freq="5min", tz="UTC")
+        intraday_df = pd.DataFrame(
+            {
+                ("Close", "^NSEI"): [102.5, 103.4, 104.2],
+                ("Low", "^NSEI"): [101.8, 102.1, 103.0],
+                ("High", "^NSEI"): [103.0, 104.0, 104.5],
+            },
+            index=idx_i,
+        )
+        mock_dl.side_effect = [daily_df, intraday_df]
+        snaps = cli._batch_index_snapshots(["^NSEI"])
+        self.assertEqual(snaps["^NSEI"]["regularMarketPrice"], 104.2)
+        self.assertEqual(snaps["^NSEI"]["regularMarketPreviousClose"], 100.0)
+        self.assertEqual(snaps["^NSEI"]["regularMarketDayLow"], 101.8)
+        self.assertEqual(snaps["^NSEI"]["regularMarketDayHigh"], 104.5)
+
+    @patch("tickertrail.cli.yf.download")
+    def test_batch_index_snapshots_falls_back_to_daily_when_intraday_batch_unavailable(self, mock_dl):
+        idx_d = pd.date_range("2026-02-10", periods=3, freq="D", tz="UTC")
+        daily_df = pd.DataFrame(
+            {
+                ("Close", "^NSEI"): [99.0, 100.0, 101.0],
+                ("Low", "^NSEI"): [97.0, 98.0, 99.0],
+                ("High", "^NSEI"): [101.0, 102.0, 103.0],
+            },
+            index=idx_d,
+        )
+        mock_dl.side_effect = [daily_df, RuntimeError("intraday unavailable")]
         snaps = cli._batch_index_snapshots(["^NSEI"])
         self.assertEqual(snaps["^NSEI"]["regularMarketPrice"], 101.0)
+        self.assertEqual(snaps["^NSEI"]["regularMarketPreviousClose"], 100.0)
         self.assertEqual(snaps["^NSEI"]["regularMarketDayLow"], 99.0)
         self.assertEqual(snaps["^NSEI"]["regularMarketDayHigh"], 103.0)
 
@@ -1392,12 +1577,24 @@ class BranchHelperTests(unittest.TestCase):
             index=idx_d,
             columns=daily_cols,
         )
-        with patch("tickertrail.cli.yf.download", return_value=daily_df):
+        idx_i = pd.date_range("2026-02-12 09:15", periods=2, freq="5min", tz="UTC")
+        intraday_cols = pd.MultiIndex.from_product(
+            [["Close", "Low", "High"], ["^NSEI", "^IXIC"]]
+        )
+        intraday_df = pd.DataFrame(
+            [
+                [104.0, 206.0, 103.5, 205.5, 104.5, 206.5],
+                [105.0, 207.0, 104.5, 206.5, 105.5, 207.5],
+            ],
+            index=idx_i,
+            columns=intraday_cols,
+        )
+        with patch("tickertrail.cli.yf.download", side_effect=[daily_df, intraday_df]):
             snaps = cli._batch_index_snapshots(["^NSEI", "^IXIC"])
-        self.assertEqual(snaps["^NSEI"]["regularMarketPrice"], 102.0)
+        self.assertEqual(snaps["^NSEI"]["regularMarketPrice"], 105.0)
         self.assertEqual(snaps["^NSEI"]["regularMarketPreviousClose"], 101.0)
-        self.assertEqual(snaps["^NSEI"]["regularMarketDayLow"], 101.0)
-        self.assertEqual(snaps["^NSEI"]["regularMarketDayHigh"], 103.0)
+        self.assertEqual(snaps["^NSEI"]["regularMarketDayLow"], 103.5)
+        self.assertEqual(snaps["^NSEI"]["regularMarketDayHigh"], 105.5)
 
     def test_parse_swing_len3_invalid(self):
         parsed, err = cli._parse_swing_command_args(["NIFTY", "3m", "w"], "t")
@@ -1957,12 +2154,6 @@ class BranchRenderAndReplTests(unittest.TestCase):
         self.assertIn("`add` is available only in watchlist mode.", err_txt)
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
-    def test_run_repl_r_no_active_and_index_list(self, _mock_hist):
-        with patch("builtins.input", side_effect=["r", "index list", "exit"]), patch("sys.stderr", new_callable=io.StringIO):
-            rc = cli._run_repl(None, None, None, 80, 20)
-        self.assertEqual(rc, 0)
-
-    @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._print_index_constituent_snap", return_value=0)
     @patch("tickertrail.cli._print_quote", return_value=0)
     def test_run_repl_snap_active_index(self, _mock_quote, mock_snap, _mock_hist):
@@ -1975,10 +2166,61 @@ class BranchRenderAndReplTests(unittest.TestCase):
     @patch("tickertrail.cli._print_index_constituent_snap", return_value=0)
     @patch("tickertrail.cli._print_quote", return_value=0)
     def test_run_repl_prompt_fragment_then_snap(self, _mock_quote, mock_snap, _mock_hist):
-        with patch("builtins.input", side_effect=["tickertrail>cnxit> snap", "exit"]):
+        with patch("builtins.input", side_effect=["tt>index>cnxit> snap", "exit"]):
             rc = cli._run_repl("^CNXIT", "^CNXIT", {"regularMarketPrice": 1.0, "regularMarketPreviousClose": 1.0}, 80, 20)
         self.assertEqual(rc, 0)
         mock_snap.assert_called_once_with("^CNXIT")
+
+    @patch("tickertrail.cli._enable_repl_history", return_value=None)
+    def test_run_repl_starts_with_base_prompt_without_active_symbol(self, _mock_hist):
+        prompts: list[str] = []
+        commands = iter(["exit"])
+
+        def fake_input(prompt: str) -> str:
+            prompts.append(prompt)
+            return next(commands)
+
+        with patch("builtins.input", side_effect=fake_input):
+            rc = cli._run_repl(None, None, None, 80, 20)
+        self.assertEqual(rc, 0)
+        self.assertEqual(prompts, ["tt> "])
+
+    @patch("tickertrail.cli._enable_repl_history", return_value=None)
+    def test_run_repl_starts_with_stock_prompt_for_active_symbol(self, _mock_hist):
+        prompts: list[str] = []
+        commands = iter(["exit"])
+
+        def fake_input(prompt: str) -> str:
+            prompts.append(prompt)
+            return next(commands)
+
+        with patch("builtins.input", side_effect=fake_input):
+            rc = cli._run_repl("infy", "INFY.NS", {"regularMarketPrice": 1.0, "regularMarketPreviousClose": 1.0}, 80, 20)
+        self.assertEqual(rc, 0)
+        self.assertEqual(prompts, ["tt>stock>infy> "])
+
+    @patch("tickertrail.cli._enable_repl_history", return_value=None)
+    @patch("tickertrail.cli._print_quote", return_value=0)
+    @patch("tickertrail.cli._resolve_symbol_with_fallback", return_value=("^NSEBANK", {"regularMarketPrice": 1.0, "regularMarketPreviousClose": 1.0}))
+    @patch("tickertrail.cli._watchlist_symbols", return_value=[])
+    def test_run_repl_updates_prompt_across_watchlist_and_index_contexts(
+        self,
+        _mock_symbols,
+        _mock_resolve,
+        _mock_quote,
+        _mock_hist,
+    ):
+        prompts: list[str] = []
+        commands = iter(["watchlist open sharekhan", "bank", "exit"])
+
+        def fake_input(prompt: str) -> str:
+            prompts.append(prompt)
+            return next(commands)
+
+        with patch("builtins.input", side_effect=fake_input):
+            rc = cli._run_repl(None, None, None, 80, 20)
+        self.assertEqual(rc, 0)
+        self.assertEqual(prompts, ["tt> ", "tt>watchlist>sharekhan> ", "tt>index>bank> "])
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._resolve_symbol", return_value=("^CNXMNC", {"regularMarketPrice": 1.0}))
@@ -2054,7 +2296,7 @@ class BranchRenderAndReplTests(unittest.TestCase):
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._render_compare_table", return_value=0)
     @patch("tickertrail.cli._print_quote", return_value=0)
-    def test_run_repl_comp_usage_error_then_success(self, _mock_quote, mock_comp, _mock_hist):
+    def test_run_repl_cmp_reports_usage_before_valid_compare(self, _mock_quote, mock_comp, _mock_hist):
         cmds = ["cmp nifty w", "cmp nifty goldbees 3y w", "exit"]
         with patch("builtins.input", side_effect=cmds), patch("sys.stderr", new_callable=io.StringIO) as err:
             rc = cli._run_repl("BEL", "BEL.NS", {"regularMarketPrice": 1.0, "regularMarketPreviousClose": 1.0}, 80, 20)
@@ -2419,14 +2661,6 @@ class BranchRenderAndReplTests(unittest.TestCase):
         with patch("builtins.input", side_effect=["r", "exit"]), patch("sys.stderr", new_callable=io.StringIO):
             rc = cli._run_repl("BEL", "BEL.NS", {"regularMarketPrice": 1.0, "regularMarketPreviousClose": 1.0}, 80, 20)
         self.assertEqual(rc, 0)
-
-    @patch("tickertrail.cli._run_repl", return_value=0)
-    @patch("tickertrail.cli._resolve_symbol_with_fallback", return_value=("AAPL", {"regularMarketPrice": 1.0}))
-    def test_main_plain_symbol_path(self, _mock_resolve, mock_repl):
-        rc = cli.main(["AAPL"])
-        self.assertEqual(rc, 0)
-        self.assertTrue(mock_repl.called)
-
 
 if __name__ == "__main__":
     unittest.main()

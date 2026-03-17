@@ -176,7 +176,7 @@ def batch_index_snapshots(
     download_fn: Callable[..., pd.DataFrame],
     track_network_call: Callable[[str], None],
 ) -> dict[str, dict[str, float | None]]:
-    """Fetch price/change/day-range snapshots in one daily batch call."""
+    """Fetch grouped snapshots using intraday-last price with daily-close fallback."""
     snapshots: dict[str, dict[str, float | None]] = {
         sym: {
             "regularMarketPrice": None,
@@ -191,33 +191,96 @@ def batch_index_snapshots(
     if not symbols:
         return snapshots
     symbol_str = " ".join(symbols)
+    daily = pd.DataFrame()
+    intraday = pd.DataFrame()
+
     try:
         track_network_call("yfinance.download")
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             daily = download_fn(symbol_str, period="5d", interval="1d", progress=False, auto_adjust=False)
-        if daily.empty:
-            return snapshots
-        for symbol in symbols:
-            close_series = series_for_symbol_field(daily, symbol, "Close")
-            low_series = series_for_symbol_field(daily, symbol, "Low")
-            high_series = series_for_symbol_field(daily, symbol, "High")
-            if close_series is None or len(close_series) < 1:
-                continue
-            price = float(close_series.iloc[-1])
-            prev = float(close_series.iloc[-2]) if len(close_series) >= 2 else None
-            day_low = float(low_series.iloc[-1]) if low_series is not None and len(low_series) >= 1 else None
-            day_high = float(high_series.iloc[-1]) if high_series is not None and len(high_series) >= 1 else None
-            snapshots[symbol] = {
-                "regularMarketPrice": price,
-                "regularMarketPreviousClose": prev,
-                "regularMarketDayLow": day_low,
-                "regularMarketDayHigh": day_high,
-                "regularMarketChange": None,
-                "regularMarketChangePercent": None,
-            }
     except Exception:
+        daily = pd.DataFrame()
+
+    try:
+        track_network_call("yfinance.download")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            intraday = download_fn(symbol_str, period="1d", interval="5m", progress=False, auto_adjust=False)
+    except Exception:
+        intraday = pd.DataFrame()
+
+    if daily.empty and intraday.empty:
         return snapshots
+
+    for symbol in symbols:
+        close_series = series_for_symbol_field(daily, symbol, "Close")
+        intraday_close_series = series_for_symbol_field(intraday, symbol, "Close")
+        intraday_low_series = series_for_symbol_field(intraday, symbol, "Low")
+        intraday_high_series = series_for_symbol_field(intraday, symbol, "High")
+        daily_low_series = series_for_symbol_field(daily, symbol, "Low")
+        daily_high_series = series_for_symbol_field(daily, symbol, "High")
+        if close_series is None and intraday_close_series is None:
+            continue
+
+        if intraday_close_series is not None and len(intraday_close_series) >= 1:
+            price = float(intraday_close_series.iloc[-1])
+        elif close_series is not None and len(close_series) >= 1:
+            price = float(close_series.iloc[-1])
+        else:
+            price = None
+
+        prev = float(close_series.iloc[-2]) if close_series is not None and len(close_series) >= 2 else None
+
+        if intraday_low_series is not None and len(intraday_low_series) >= 1:
+            day_low = float(min(intraday_low_series.tolist()))
+        elif daily_low_series is not None and len(daily_low_series) >= 1:
+            day_low = float(daily_low_series.iloc[-1])
+        else:
+            day_low = None
+
+        if intraday_high_series is not None and len(intraday_high_series) >= 1:
+            day_high = float(max(intraday_high_series.tolist()))
+        elif daily_high_series is not None and len(daily_high_series) >= 1:
+            day_high = float(daily_high_series.iloc[-1])
+        else:
+            day_high = None
+
+        change = None if price is None or prev is None else price - prev
+        change_pct = None if change is None or not prev else (change / prev) * 100
+        snapshots[symbol] = {
+            "regularMarketPrice": price,
+            "regularMarketPreviousClose": prev,
+            "regularMarketDayLow": day_low,
+            "regularMarketDayHigh": day_high,
+            "regularMarketChange": change,
+            "regularMarketChangePercent": change_pct,
+        }
     return snapshots
+
+
+def overlay_live_quote_on_snapshot(snapshot: dict[str, float | None], info: dict[str, Any]) -> None:
+    """Overlay one snapshot with live quote fields when Yahoo quote data is available."""
+    price = coerce_float(info.get("regularMarketPrice"))
+    prev = coerce_float(info.get("regularMarketPreviousClose"))
+    change = coerce_float(info.get("regularMarketChange"))
+    change_pct = coerce_float(info.get("regularMarketChangePercent"))
+    day_low, day_high = extract_quote_day_range(info)
+
+    if price is not None:
+        snapshot["regularMarketPrice"] = price
+    if prev is not None:
+        snapshot["regularMarketPreviousClose"] = prev
+    if day_low is not None and day_high is not None and day_high > day_low:
+        snapshot["regularMarketDayLow"] = day_low
+        snapshot["regularMarketDayHigh"] = day_high
+
+    if change is None and price is not None and prev is not None and prev:
+        change = price - prev
+    if change_pct is None and change is not None and prev is not None and prev:
+        change_pct = (change / prev) * 100
+    if change is not None:
+        snapshot["regularMarketChange"] = change
+    if change_pct is not None:
+        snapshot["regularMarketChangePercent"] = change_pct
 
 
 def resolve_group_candidate_snapshots(
@@ -299,6 +362,16 @@ def resolve_group_candidate_snapshots(
                     misses = 0
                     break
 
+        # Refresh displayed rows from the same live quote surface used by single-symbol quote.
+        for key, (chosen_symbol, snapshot) in list(chosen.items()):
+            if " " in chosen_symbol:
+                continue
+            info = get_quote_payload(chosen_symbol)
+            if not has_quote_data(info):
+                continue
+            overlay_live_quote_on_snapshot(snapshot, info)
+            chosen[key] = (chosen_symbol, snapshot)
+
         for key, (chosen_symbol, snapshot) in list(chosen.items()):
             enrich_day_range_from_symbol_candidates_fn(unresolved.get(key, [chosen_symbol]), snapshot)
 
@@ -353,6 +426,15 @@ def fetch_group_snapshots_with_retries(
                     consecutive_fallback_misses += 1
                 else:
                     consecutive_fallback_misses = 0
+
+        # Refresh resolved rows from live quote fields so grouped views match single-symbol quote mode.
+        for sym, snapshot in snapshots.items():
+            if snapshot.get("regularMarketPrice") is None or " " in sym:
+                continue
+            info = get_quote_payload(sym)
+            if not has_quote_data(info):
+                continue
+            overlay_live_quote_on_snapshot(snapshot, info)
 
         for sym, snapshot in snapshots.items():
             enrich_day_range_from_symbol_candidates_fn([sym], snapshot)

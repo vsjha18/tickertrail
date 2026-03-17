@@ -79,14 +79,14 @@ corr 6mo
 
 Many commands are context-sensitive. You usually do not need arguments.
 
-### 1) Stock mode (`tickertrail>symbol>`)
+### 1) Stock mode (`tt>stock>infy>`)
 
 - Entered by typing a stock symbol (example: `infy`).
 - `quote`, `c`, `cc`, `t`, `tt` run on the active symbol.
 - `move`, `trend`, `relret` run on the active symbol.
 - `corr` needs at least two symbols, so use `corr on <code1> <code2> ...`.
 
-### 2) Index mode (`tickertrail>index>`)
+### 2) Index mode (`tt>index>bank>`)
 
 - Entered by typing an index alias/symbol (example: `nifty`, `it`, `defence`, `^cnxit`).
 - If live quote fields are partial, TickerTrail still keeps you in index mode and shows the best available values.
@@ -97,7 +97,7 @@ Many commands are context-sensitive. You usually do not need arguments.
   - `relret` runs over index constituents with an index-appropriate benchmark.
   - `corr` runs over index constituents and needs at least two valid overlapping series.
 
-### 3) Watchlist mode (`<watchlist-name>>`)
+### 3) Watchlist mode (`tt>watchlist>sharekhan>`)
 
 - Entered with `watchlist open <name>`.
 - `move`, `trend`, `relret`, `corr` with no arguments run on symbols in that watchlist.
@@ -153,7 +153,7 @@ These snippets are captured from the real CLI renderers with fixed sample data, 
 ### Quote
 
 ```text
-tickertrail> quote
+tt> quote
 
 INFY.NS  Infosys Ltd.  [INR]
 Px 1,941.20  Chg +19.80 (+1.03%)  O 1,928.00  L/H 1,918.10/1,952.30
@@ -171,7 +171,7 @@ PE(TTM) 30.80 | PEG 2.10 | ROE 30.20%
 ### Move Board
 
 ```text
-tickertrail> move on infy tcs reliance 1mo
+tt> move on infy tcs reliance 1mo
 
 Moves (1MO) - Explicit symbols
 Symbol           1MO Moves    Dots
@@ -183,7 +183,7 @@ RELIANCE.NS      1MO Moves    oooooooooooooooooooooooooooooo
 ### Trend Board
 
 ```text
-tickertrail> trend on infy tcs reliance
+tt> trend on infy tcs reliance
 
 Trend (Current) - Explicit symbols
 Symbol           Trend Score
@@ -195,7 +195,7 @@ RELIANCE.NS      5.0/5.0
 ### Relative Return
 
 ```text
-tickertrail> rr on infy tcs reliance vs nifty 1mo
+tt> rr on infy tcs reliance vs nifty 1mo
 
 Relative Return (1MO) - Explicit symbols vs NIFTY 50 (^NSEI)
 Symbol               Return      Bench     RelRet
@@ -207,7 +207,7 @@ TCS.NS              +10.86%    +12.06%     -1.20%
 ### Correlation Summary
 
 ```text
-tickertrail> corr on infy tcs reliance 1mo
+tt> corr on infy tcs reliance 1mo
 
 Correlation Summary (1MO) - Explicit symbols
 Universe: 3 symbols | overlap points: 29
@@ -227,7 +227,7 @@ n/a
 ### Snapshot
 
 ```text
-tickertrail> snap
+tt> snap
 
 Snap: NIFTY IT (10 constituents)
 Symbol                    Price             Change              Range
@@ -240,10 +240,13 @@ HCLTECH.NS               940.00     +0.20 (+0.02%)     [──────●─
 Snap fetch passes used: 1
 ```
 
+Grouped snapshot views (`index`, `snap`, and watchlist snapshots) use live quote fields when Yahoo exposes them, then fall back to intraday batch price/range, then daily-close batch data.
+Analytics that depend on the latest daily point, such as `move`, `trend`, and `relret`, overlay the current live quote during market hours and fall back to cached/EOD history when the market is closed.
+
 ### Swing Chart (`c`)
 
 ```text
-tickertrail> c 6mo
+tt> c 6mo
 
 ^CNXIT close (6mo, 1d)  +68.71 (+47.72%)
      ┌─────────────────────────────────────────────────────────────────────────┐
@@ -265,7 +268,7 @@ Move: +68.71 (+47.72%) | From: 03-09-25 -> 01-03-26
 ### Intraday Chart (`cc`)
 
 ```text
-tickertrail> cc 5m
+tt> cc 5m
 
 ^CNXIT close (1d, 5m)  +7.21 (+0.50%)
       ┌────────────────────────────────────────────────────────────────────────┐
@@ -286,7 +289,7 @@ Move: +7.21 (+0.50%) | From: 05:55 -> 10:00
 ### Swing Table (`t`)
 
 ```text
-tickertrail> t 1y
+tt> t 1y
 
 Rebased Co-Plot (base=100): ^CNXIT vs NIFTY 50 [period=1y, bin=1mo]
 Date Range: 05-04-25 -> 01-03-26
@@ -302,7 +305,7 @@ Final Alpha% (Stock vs Bench): -1.37%
 ### Intraday Table (`tt`)
 
 ```text
-tickertrail> tt 15m
+tt> tt 15m
 
 Rebased Co-Plot (base=100): ^CNXIT vs NIFTY 50 [period=1d, bin=15m]
 Date Range: 21:45 -> 10:00
@@ -320,7 +323,7 @@ Tables are unsampled: row spacing always matches the header bin (for example `bi
 ### Multi-Symbol Compare (`cmp`)
 
 ```text
-tickertrail> cmp tcs infy reliance 1y w
+tt> cmp tcs infy reliance 1y w
 
 Compare (base=100): TCS.NS, INFY.NS, RELIANCE.NS [1y, 1wk]
 Date Range: 09-03-25 -> 01-03-26
@@ -387,7 +390,7 @@ Top-level:
 - `watchlist` (exit watchlist mode)
 - If the watchlist database cannot be read temporarily, the app reports a database read error instead of incorrectly saying the watchlist does not exist.
 
-Inside watchlist mode (`<name>>`):
+Inside watchlist mode (`tt>watchlist>sharekhan>`):
 - `add <code...>`
 - `delete <code...>`
 - `list` / `ll`
