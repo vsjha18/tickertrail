@@ -510,8 +510,20 @@ class HelperBehaviorTests(unittest.TestCase):
             "tickertrail.cli._fetch_group_snapshots_with_retries",
             return_value=(
                 {
-                    "TCS.NS": {"regularMarketPrice": 10.0, "regularMarketPreviousClose": 9.0, "regularMarketDayLow": 9.0, "regularMarketDayHigh": 10.0},
-                    "^NSEI": {"regularMarketPrice": 22100.0, "regularMarketPreviousClose": 22000.0},
+                    "TCS.NS": {
+                        "regularMarketPrice": 10.0,
+                        "regularMarketPreviousClose": 9.0,
+                        "regularMarketDayLow": 9.0,
+                        "regularMarketDayHigh": 10.0,
+                        "marketDataTimestamp": dt.datetime(2026, 3, 18, 8, 11, tzinfo=dt.timezone.utc).timestamp(),
+                        "marketDataIsIntraday": 1.0,
+                    },
+                    "^NSEI": {
+                        "regularMarketPrice": 22100.0,
+                        "regularMarketPreviousClose": 22000.0,
+                        "marketDataTimestamp": dt.datetime(2026, 3, 18, 8, 11, tzinfo=dt.timezone.utc).timestamp(),
+                        "marketDataIsIntraday": 1.0,
+                    },
                 },
                 2,
             ),
@@ -519,6 +531,7 @@ class HelperBehaviorTests(unittest.TestCase):
             rc = cli._print_watchlist_snapshot("x")
             self.assertEqual(rc, 0)
             self.assertIn("Symbol", out.getvalue())
+            self.assertIn("Live prices as of", out.getvalue())
             self.assertIn("Equal-Weight 1D", out.getvalue())
             self.assertIn("NIFTY 50 1D", out.getvalue())
             self.assertIn("Alpha", out.getvalue())
@@ -862,6 +875,55 @@ class RenderBehaviorTests(unittest.TestCase):
             self.assertIn("NIFTY DEFENCE", out.getvalue())
             self.assertIn("NIFTY SMALLCAP 100", out.getvalue())
             self.assertIn("NIFTY MIDCAP SELECT", out.getvalue())
+
+    @patch("tickertrail.cli._fetch_day_range_fallback", return_value=(None, None))
+    @patch("tickertrail.cli._get_quote_payload", return_value={})
+    @patch("tickertrail.cli._has_quote_data", return_value=False)
+    @patch("tickertrail.cli._batch_index_snapshots")
+    def test_index_board_shows_batch_freshness_line(self, mock_batch, _mock_has, _mock_quote, _mock_rng):
+        as_of = dt.datetime(2026, 3, 18, 8, 11, tzinfo=dt.timezone.utc).timestamp()
+        mock_batch.return_value = {
+            "^NSEI": {
+                "regularMarketPrice": 99.0,
+                "regularMarketPreviousClose": 98.0,
+                "regularMarketDayLow": 97.0,
+                "regularMarketDayHigh": 100.0,
+                "marketDataTimestamp": as_of,
+                "marketDataIsIntraday": 1.0,
+            }
+        }
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._print_index_board()
+        self.assertEqual(rc, 0)
+        self.assertIn("Live prices as of", out.getvalue())
+
+    @patch("tickertrail.cli._fetch_day_range_fallback", return_value=(None, None))
+    @patch("tickertrail.cli._has_quote_data", return_value=True)
+    @patch("tickertrail.cli._batch_index_snapshots", return_value={})
+    @patch("tickertrail.cli._get_quote_payload")
+    def test_index_board_recovers_with_direct_quote_when_batch_resolution_is_empty(
+        self,
+        mock_quote,
+        _mock_batch,
+        _mock_has,
+        _mock_rng,
+    ):
+        mock_quote.return_value = {
+            "regularMarketPrice": 99.0,
+            "regularMarketPreviousClose": 98.0,
+            "regularMarketDayLow": 97.5,
+            "regularMarketDayHigh": 99.5,
+            "regularMarketChange": 1.0,
+            "regularMarketChangePercent": 1.02,
+        }
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._print_index_board()
+            txt = out.getvalue()
+        self.assertEqual(rc, 0)
+        line = next((ln for ln in txt.splitlines() if "NIFTY 50" in ln), "")
+        self.assertIn("99.00", line)
+        self.assertIn("+1.00 (+1.02%)", line)
+        self.assertTrue(any(call.args[0] == "^NSEI" for call in mock_quote.call_args_list))
 
     @patch("tickertrail.cli._fetch_day_range_fallback", return_value=(None, None))
     @patch("tickertrail.cli._get_quote_payload", return_value={})

@@ -7,7 +7,6 @@ import io
 import json
 import math
 import os
-import random
 import re
 import shutil
 import subprocess
@@ -39,28 +38,24 @@ _NSE_UNIVERSE_CSV = Path(__file__).resolve().parents[2] / "data" / "nse_equity_l
 _INDEX_CONSTITUENTS_CSV = Path(__file__).resolve().parents[2] / "data" / "index_constituents.csv"
 _WATCHLIST_DB_JSON = Path(__file__).resolve().parents[2] / "data" / "db.json"
 _HISTORY_FILE = Path(__file__).resolve().parents[2] / ".tickertrail_history"
-_CLI_CONF_JSON = Path(__file__).resolve().with_name("conf.json")
 _WATCHLIST_IO_RETRY_DELAY_SECONDS = 0.05
 _WATCHLIST_LAST_ERROR: str | None = None
-_INDEX_SYMBOL_FALLBACKS: dict[str, tuple[str, ...]] = {
-    # Keep only empirically useful Yahoo alternates to minimize dead probes.
-    "^CNXMIDCAP": ("NIFTY_MIDCAP_100.NS",),
-    "^NIFTYNXT50": ("NIFTY_NEXT_50.NS",),
-    "^NSESMCP100": ("NIFTY_SMLCAP_100.NS",),
-    "^CNXDEFENCE": ("NIFTY_IND_DEFENCE.NS",),
-}
-_INDEX_PREFERRED_QUOTE_SYMBOLS: dict[str, str] = {
+_INDEX_FETCH_SYMBOLS: dict[str, str] = {
+    # Use one explicit Yahoo fetch symbol per index where the canonical code is unreliable.
     "^CNXMIDCAP": "NIFTY_MIDCAP_100.NS",
     "^NIFTYNXT50": "NIFTY_NEXT_50.NS",
     "^NSESMCP100": "NIFTY_SMLCAP_100.NS",
     "^CNXDEFENCE": "NIFTY_IND_DEFENCE.NS",
 }
 _INDEX_NORMALIZATION_ALIASES: dict[str, str] = {
-    # Compatibility aliases retained for normalization only (not active probe targets).
+    # Compatibility aliases retained for normalization only.
     "^NSEMDCP100": "^CNXMIDCAP",
     "NIFTYMIDCAP100.NS": "^CNXMIDCAP",
+    "NIFTY_MIDCAP_100.NS": "^CNXMIDCAP",
     "^NSESMCP250": "^NSESMCP100",
     "NIFTY_SMALLCAP_100.NS": "^NSESMCP100",
+    "NIFTY_SMLCAP_100.NS": "^NSESMCP100",
+    "NIFTY_NEXT_50.NS": "^NIFTYNXT50",
     "NIFTY_IND_DEFENCE.NS": "^CNXDEFENCE",
 }
 _INDIA_INDEX_BOARD = (
@@ -242,7 +237,6 @@ _MOVES_DAYS_BY_PERIOD: dict[str, int] = {
     "1y": 365,
 }
 _ANALYTICS_PERIOD_HINT = "Nd|Nmo(<12)|Ny"
-_RUNTIME_CONFIG_CACHE: dict[str, float] | None = None
 _INDEX_BOARD_SYMBOLS: set[str] = {*(symbol.upper() for symbol, _ in _INDIA_INDEX_BOARD), *(symbol.upper() for symbol, _ in _GLOBAL_INDEX_BOARD)}
 _INDEX_PROMPT_LABELS: dict[str, str] = {
     "^NSEI": "nifty",
@@ -303,38 +297,6 @@ def _read_conf_duration_seconds(payload: dict[str, Any], key: str) -> float:
         return 0.0
 
 
-def _load_runtime_config() -> dict[str, float]:
-    """Load and cache CLI runtime config from `conf.json` beside `cli.py`."""
-    global _RUNTIME_CONFIG_CACHE
-    if _RUNTIME_CONFIG_CACHE is not None:
-        return _RUNTIME_CONFIG_CACHE
-    payload: dict[str, Any] = {}
-    try:
-        with _CLI_CONF_JSON.open(encoding="utf-8") as f:
-            loaded = json.load(f)
-            if isinstance(loaded, dict):
-                payload = loaded
-    except (OSError, json.JSONDecodeError):
-        payload = {}
-
-    def _read_with_legacy(primary_key: str, legacy_key: str) -> float:
-        """Read config duration by preferred key and fall back to a legacy key."""
-        if primary_key in payload:
-            return _read_conf_duration_seconds(payload, primary_key)
-        return _read_conf_duration_seconds(payload, legacy_key)
-
-    config = {
-        "ticker_fallback_jitter_min_s": _read_with_legacy("ticker_fallback_jitter_min", "ticker_fallback_jitter_min_s"),
-        "ticker_fallback_jitter_max_s": _read_with_legacy("ticker_fallback_jitter_max", "ticker_fallback_jitter_max_s"),
-        "ticker_fallback_backoff_step_s": _read_with_legacy("ticker_fallback_backoff_step", "ticker_fallback_backoff_step_s"),
-        "ticker_fallback_backoff_max_s": _read_with_legacy("ticker_fallback_backoff_max", "ticker_fallback_backoff_max_s"),
-    }
-    if config["ticker_fallback_jitter_max_s"] < config["ticker_fallback_jitter_min_s"]:
-        config["ticker_fallback_jitter_max_s"] = config["ticker_fallback_jitter_min_s"]
-    _RUNTIME_CONFIG_CACHE = config
-    return _RUNTIME_CONFIG_CACHE
-
-
 @dataclass(frozen=True)
 class _ParsedSwingCommand:
     """Parsed form of a swing command (`t` or `c`)."""
@@ -382,6 +344,15 @@ class _ReplContext:
     info: dict[str, Any] | None
     prompt_label: str | None
     watchlist_name: str | None = None
+
+
+class _BatchLivePrices(dict[str, float]):
+    """Grouped live-price map carrying one shared minute-bar freshness timestamp."""
+
+    def __init__(self, prices: dict[str, float] | None = None, as_of_epoch: float | None = None):
+        """Initialize batched live prices plus optional shared `as_of` timestamp."""
+        super().__init__(prices or {})
+        self.as_of_epoch = as_of_epoch
 
 
 def _load_watchlists() -> dict[str, list[str]]:
@@ -841,22 +812,6 @@ def _silent_progress_scope(_label: str):
     yield
 
 
-def _ticker_fallback_pause(consecutive_misses: int) -> None:
-    """Throttle per-symbol Ticker fallback calls with jitter and adaptive backoff."""
-    config = _load_runtime_config()
-    jitter = random.uniform(
-        config["ticker_fallback_jitter_min_s"],
-        config["ticker_fallback_jitter_max_s"],
-    )
-    # When misses pile up, progressively cool down to reduce provider throttling.
-    backoff_steps = max(0, consecutive_misses // 5)
-    backoff = min(
-        config["ticker_fallback_backoff_max_s"],
-        backoff_steps * config["ticker_fallback_backoff_step_s"],
-    )
-    time.sleep(jitter + backoff)
-
-
 def _supports_color() -> bool:
     """Return True when ANSI color output should be enabled."""
     return sys.stdout.isatty() and not bool(__import__("os").environ.get("NO_COLOR"))
@@ -1054,25 +1009,20 @@ def _candidate_symbols(symbol: str) -> list[str]:
     return [f"{base}.NS", f"{base}.BO", base]
 
 
-def _index_probe_candidates(symbol: str) -> list[str]:
-    """Return ordered Yahoo probe symbols for one index, preferring empirically stable codes."""
+def _canonical_index_symbol(symbol: str) -> str:
+    """Return the canonical app symbol for one known index-like input."""
     upper = symbol.strip().upper()
     if not upper:
-        return []
-    ordered = [
-        _INDEX_PREFERRED_QUOTE_SYMBOLS.get(upper, upper),
-        upper,
-        *_INDEX_SYMBOL_FALLBACKS.get(upper, ()),
-    ]
-    seen: set[str] = set()
-    out: list[str] = []
-    for candidate in ordered:
-        item = candidate.strip().upper()
-        if not item or item in seen:
-            continue
-        seen.add(item)
-        out.append(item)
-    return out
+        return ""
+    return _INDEX_NORMALIZATION_ALIASES.get(upper, upper)
+
+
+def _preferred_index_fetch_symbol(symbol: str) -> str:
+    """Return the single Yahoo symbol used to fetch one index quote/snapshot."""
+    canonical = _canonical_index_symbol(symbol)
+    if not canonical:
+        return ""
+    return _INDEX_FETCH_SYMBOLS.get(canonical, canonical)
 
 
 def _has_quote_data(info: dict[str, Any]) -> bool:
@@ -1098,13 +1048,18 @@ def _resolve_symbol(symbol: str) -> tuple[str, dict[str, Any] | None]:
         return symbol, None
 
     for candidate in candidates:
-        # Decision block: index quote probes prefer symbols with the strongest observed Yahoo coverage.
-        to_try = _index_probe_candidates(candidate) if _is_known_index_symbol(candidate) else [candidate]
-        for probe in to_try:
+        if _is_known_index_symbol(candidate):
+            # Keep index fetch behavior explicit: one app symbol, one Yahoo fetch symbol.
+            fetch_symbol = _preferred_index_fetch_symbol(candidate)
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                info = _get_quote_payload(probe)
+                info = _get_quote_payload(fetch_symbol)
             if _has_quote_data(info):
-                return probe, info
+                return fetch_symbol, info
+            continue
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            info = _get_quote_payload(candidate)
+        if _has_quote_data(info):
+            return candidate, info
 
     return candidates[0], None
 
@@ -1434,15 +1389,12 @@ def _print_symbol_news(symbol_input: str, limit: int = 5) -> int:
 
 
 def _is_known_index_symbol(symbol: str) -> bool:
-    """Return True when symbol matches configured/known index symbols or fallbacks."""
+    """Return True when symbol maps to a configured index or fetch alias."""
     upper = symbol.strip().upper()
     if not upper:
         return False
-    if upper in _INDEX_NORMALIZATION_ALIASES:
-        return True
-    if upper in _INDEX_BOARD_SYMBOLS or upper in _INDEX_SYMBOL_FALLBACKS:
-        return True
-    return any(upper == fallback.upper() for fallbacks in _INDEX_SYMBOL_FALLBACKS.values() for fallback in fallbacks)
+    canonical = _canonical_index_symbol(upper)
+    return canonical in _INDEX_BOARD_SYMBOLS or canonical in _INDEX_FETCH_SYMBOLS
 
 
 def _is_index_context_symbol(symbol: str | None) -> bool:
@@ -1531,6 +1483,37 @@ def _print_quote(input_symbol: str, resolved_symbol: str, include_after_hours: b
     )
 
 
+def _snapshot_from_quote_payload(symbol: str) -> dict[str, float | None] | None:
+    """Build one snapshot-like row payload from direct quote fields."""
+    info = _get_quote_payload(symbol)
+    if not _has_quote_data(info):
+        return None
+    price = _coerce_float(info.get("regularMarketPrice") if info.get("regularMarketPrice") is not None else info.get("lastPrice"))
+    prev = _coerce_float(
+        info.get("regularMarketPreviousClose")
+        if info.get("regularMarketPreviousClose") is not None
+        else info.get("previousClose")
+    )
+    day_low, day_high = _extract_quote_day_range(info)
+    change = _coerce_float(info.get("regularMarketChange"))
+    pct = _coerce_float(info.get("regularMarketChangePercent"))
+    market_time = _coerce_epoch_seconds(info.get("regularMarketTime"))
+    if change is None and price is not None and prev is not None:
+        change = price - prev
+    if pct is None and change is not None and prev not in (None, 0.0):
+        pct = (change / prev) * 100
+    return {
+        "regularMarketPrice": price,
+        "regularMarketPreviousClose": prev,
+        "regularMarketDayLow": day_low,
+        "regularMarketDayHigh": day_high,
+        "regularMarketChange": change,
+        "regularMarketChangePercent": pct,
+        "marketDataTimestamp": market_time,
+        "marketDataIsIntraday": 1.0 if market_time is not None else None,
+    }
+
+
 def _print_index_board() -> int:
     """Render a compact snapshot of selected India and global indices."""
 
@@ -1538,7 +1521,7 @@ def _print_index_board() -> int:
         """Resolve board rows via the shared grouped snapshot strategy."""
         primary_symbols = [symbol for symbol, _ in rows]
         candidate_map: dict[str, list[str]] = {
-            symbol: _index_probe_candidates(symbol)
+            symbol: [_preferred_index_fetch_symbol(symbol)]
             for symbol in primary_symbols
         }
         # For index board, avoid quote-based day-range enrichment during candidate resolution.
@@ -1555,16 +1538,19 @@ def _print_index_board() -> int:
     def _render_section(title: str, rows: tuple[tuple[str, str], ...]) -> None:
         """Render one section of the market board using resolved snapshots."""
 
-        print(f"\n{title}")
-        print(f"{'Index':<20} {'Ticker':<20} {'Price':>12} {'Change':>18} {'Range':>18}")
         rendered_rows: list[tuple[str, str, str, str, str, float | None, float | None]] = []
+        section_snapshots: dict[str, dict[str, float | None]] = {}
         for symbol, label in rows:
             chosen_symbol = symbol
             price = prev = day_low = day_high = None
+            change_raw = None
+            pct_raw = None
+            snapshot_used: dict[str, float | None] | None = None
 
             resolved = chosen_snapshots.get(symbol)
             if resolved is not None:
                 chosen_symbol, snap = resolved
+                snapshot_used = snap
                 price = snap.get("regularMarketPrice")
                 prev = snap.get("regularMarketPreviousClose")
                 day_low = snap.get("regularMarketDayLow")
@@ -1572,8 +1558,20 @@ def _print_index_board() -> int:
                 change_raw = snap.get("regularMarketChange")
                 pct_raw = snap.get("regularMarketChangePercent")
             else:
-                change_raw = None
-                pct_raw = None
+                # If the grouped batch path came back empty for this row, recover from a
+                # direct quote fetch instead of rendering a blanket board of `n/a`.
+                chosen_symbol = _preferred_index_fetch_symbol(symbol)
+                quote_snapshot = _snapshot_from_quote_payload(chosen_symbol)
+                if quote_snapshot is not None:
+                    snapshot_used = quote_snapshot
+                    price = quote_snapshot.get("regularMarketPrice")
+                    prev = quote_snapshot.get("regularMarketPreviousClose")
+                    day_low = quote_snapshot.get("regularMarketDayLow")
+                    day_high = quote_snapshot.get("regularMarketDayHigh")
+                    change_raw = quote_snapshot.get("regularMarketChange")
+                    pct_raw = quote_snapshot.get("regularMarketChangePercent")
+                else:
+                    chosen_symbol = symbol
 
             change = None if price is None or prev is None else float(price) - float(prev)
             pct = None if change is None or not prev else (change / float(prev)) * 100
@@ -1632,6 +1630,8 @@ def _print_index_board() -> int:
                 range_txt = "n/a"
 
             pct_sort = float(pct) if pct is not None else None
+            if snapshot_used is not None:
+                section_snapshots[symbol] = snapshot_used
             rendered_rows.append((label, chosen_symbol, price_txt, change_txt, range_txt, change, pct_sort))
 
         def _sort_key(row: tuple[str, str, str, str, str, float | None, float | None]) -> tuple[int, float]:
@@ -1643,6 +1643,11 @@ def _print_index_board() -> int:
                 return (0, -pct_val)
             return (1, abs(pct_val))
 
+        print(f"\n{title}")
+        freshness_line = _format_snapshot_freshness_line(section_snapshots, [symbol for symbol, _label in rows])
+        if freshness_line:
+            print(freshness_line)
+        print(f"{'Index':<20} {'Ticker':<20} {'Price':>12} {'Change':>18} {'Range':>18}")
         # Keep output scan-friendly: all gainers first, then losers, then unknowns.
         for label, chosen_symbol, price_txt, change_txt, range_txt, _change, _pct in sorted(rendered_rows, key=_sort_key):
             # Keep NIFTY 50 visually prominent in sorted boards for quick scanning.
@@ -1691,16 +1696,7 @@ def _print_index_catalog() -> int:
 
 def _normalize_snap_index_symbol(symbol: str) -> str:
     """Normalize an index symbol to the canonical key used by `snap` universes."""
-    upper = symbol.strip().upper()
-    if upper in _INDEX_NORMALIZATION_ALIASES:
-        return _INDEX_NORMALIZATION_ALIASES[upper]
-    if upper in _load_snap_universes():
-        return upper
-    # Resolve known index fallbacks to their canonical primary symbols.
-    for canonical, fallbacks in _INDEX_SYMBOL_FALLBACKS.items():
-        if upper == canonical or upper in (fallback.upper() for fallback in fallbacks):
-            return canonical
-    return upper
+    return _canonical_index_symbol(symbol)
 
 
 def _load_snap_universes() -> dict[str, tuple[str, tuple[str, ...]]]:
@@ -1753,26 +1749,24 @@ def _index_quote_fallback_payload(symbol: str) -> dict[str, Any] | None:
     upper = symbol.strip().upper()
     if not upper:
         return None
-    candidates = _index_probe_candidates(upper)
-    snapshots = _batch_index_snapshots(candidates)
-    for candidate in candidates:
-        snapshot = snapshots.get(candidate, {})
-        if not isinstance(snapshot, dict):
-            continue
-        price = snapshot.get("regularMarketPrice")
-        prev = snapshot.get("regularMarketPreviousClose")
-        # Require at least one anchor value so quote rendering has meaningful content.
-        if price is None and prev is None:
-            continue
-        return {
-            "shortName": _index_label_for_symbol(upper),
-            "currency": "n/a",
-            "regularMarketPrice": price,
-            "regularMarketPreviousClose": prev,
-            "regularMarketDayLow": snapshot.get("regularMarketDayLow"),
-            "regularMarketDayHigh": snapshot.get("regularMarketDayHigh"),
-        }
-    return None
+    fetch_symbol = _preferred_index_fetch_symbol(upper)
+    snapshots = _batch_index_snapshots([fetch_symbol])
+    snapshot = snapshots.get(fetch_symbol, {})
+    if not isinstance(snapshot, dict):
+        return None
+    price = snapshot.get("regularMarketPrice")
+    prev = snapshot.get("regularMarketPreviousClose")
+    # Require at least one anchor value so quote rendering has meaningful content.
+    if price is None and prev is None:
+        return None
+    return {
+        "shortName": _index_label_for_symbol(_canonical_index_symbol(upper)),
+        "currency": "n/a",
+        "regularMarketPrice": price,
+        "regularMarketPreviousClose": prev,
+        "regularMarketDayLow": snapshot.get("regularMarketDayLow"),
+        "regularMarketDayHigh": snapshot.get("regularMarketDayHigh"),
+    }
 
 
 def _expected_constituent_count(index_symbol: str) -> int | None:
@@ -1813,6 +1807,9 @@ def _print_index_constituent_snap(index_symbol: str) -> int:
     else:
         count_txt = f"{len(constituents)} constituents"
     print(f"\nSnap: {label} ({count_txt})")
+    freshness_line = _format_snapshot_freshness_line(snapshots, list(constituents))
+    if freshness_line:
+        print(freshness_line)
     if configured_universe and expected is not None and len(constituents) != expected:
         print(
             f"Warning: constituent list is incomplete for {label}; "
@@ -1897,6 +1894,11 @@ def _coerce_float(value: Any) -> float | None:
     return snapshot_service.coerce_float(value)
 
 
+def _coerce_epoch_seconds(value: Any) -> float | None:
+    """Convert a datetime-like or numeric timestamp payload to epoch seconds."""
+    return snapshot_service.coerce_epoch_seconds(value)
+
+
 def _parse_day_range_text(value: Any) -> tuple[float | None, float | None]:
     """Parse textual day-range payloads like '31800.0 - 32100.5'."""
     return snapshot_service.parse_day_range_text(value)
@@ -1905,6 +1907,48 @@ def _parse_day_range_text(value: Any) -> tuple[float | None, float | None]:
 def _extract_quote_day_range(info: dict[str, Any]) -> tuple[float | None, float | None]:
     """Extract day low/high from quote payload across known Yahoo key variants."""
     return snapshot_service.extract_quote_day_range(info)
+
+
+def _snapshot_freshness(
+    snapshots: dict[str, dict[str, float | None]],
+    symbols: list[str],
+) -> tuple[float | None, bool]:
+    """Return latest snapshot timestamp plus whether any row came from intraday data."""
+    latest_epoch = None
+    used_intraday = False
+    for symbol in symbols:
+        snapshot = snapshots.get(symbol, {})
+        if not isinstance(snapshot, dict):
+            continue
+        epoch = _coerce_epoch_seconds(snapshot.get("marketDataTimestamp"))
+        if epoch is None:
+            continue
+        if latest_epoch is None or epoch > latest_epoch:
+            latest_epoch = epoch
+        used_intraday = used_intraday or snapshot.get("marketDataIsIntraday") == 1.0
+    return latest_epoch, used_intraday
+
+
+def _format_snapshot_freshness_line(
+    snapshots: dict[str, dict[str, float | None]],
+    symbols: list[str],
+) -> str | None:
+    """Format one grouped-snapshot freshness line for batch-driven outputs."""
+    latest_epoch, used_intraday = _snapshot_freshness(snapshots, symbols)
+    if latest_epoch is None:
+        return None
+    local_dt = dt.datetime.fromtimestamp(latest_epoch, dt.timezone.utc).astimezone()
+    if used_intraday:
+        return f"Live prices as of {local_dt.strftime('%H:%M')}"
+    return f"EOD data as of {local_dt.strftime('%d-%m-%y')}"
+
+
+def _format_live_overlay_freshness_line(as_of_epoch: float | None, prefix: str) -> str | None:
+    """Format one freshness line for daily analytics that overlay a live minute point."""
+    if as_of_epoch is None:
+        return None
+    local_dt = dt.datetime.fromtimestamp(as_of_epoch, dt.timezone.utc).astimezone()
+    return f"{prefix} as of {local_dt.strftime('%H:%M')}"
 
 
 def _enrich_snapshot_day_range_from_quote(symbol: str, snapshot: dict[str, float | None]) -> None:
@@ -1934,28 +1978,22 @@ def _resolve_group_candidate_snapshots(
     candidate_map: dict[str, list[str]],
     enrich_day_range_from_symbol_candidates_fn: Callable[[list[str], dict[str, float | None]], None] | None = None,
 ) -> tuple[dict[str, tuple[str, dict[str, float | None]]], int]:
-    """Resolve grouped snapshots with 3 batch passes, then direct per-symbol Ticker fallback."""
+    """Resolve grouped snapshots with repeated batch passes over candidate symbols."""
     enrich_fn = enrich_day_range_from_symbol_candidates_fn or _enrich_snapshot_day_range_from_symbol_candidates
     return snapshot_service.resolve_group_candidate_snapshots(
         candidate_map=candidate_map,
         batch_index_snapshots_fn=_batch_index_snapshots,
-        get_quote_payload=_get_quote_payload,
-        has_quote_data=_has_quote_data,
-        ticker_fallback_pause=_ticker_fallback_pause,
         enrich_day_range_from_symbol_candidates_fn=enrich_fn,
         progress_scope=_progress_scope,
     )
 
 
 def _fetch_group_snapshots_with_retries(symbols: list[str]) -> tuple[dict[str, dict[str, float | None]], int]:
-    """Fetch grouped snapshots with 3 batch passes, then per-symbol fallback for unresolved symbols."""
+    """Fetch grouped snapshots with repeated batch retries over unresolved symbols."""
     progress_scope = _progress_scope if len(symbols) > 1 else _silent_progress_scope
     return snapshot_service.fetch_group_snapshots_with_retries(
         symbols=symbols,
         batch_index_snapshots_fn=_batch_index_snapshots,
-        get_quote_payload=_get_quote_payload,
-        has_quote_data=_has_quote_data,
-        ticker_fallback_pause=_ticker_fallback_pause,
         enrich_day_range_from_symbol_candidates_fn=_enrich_snapshot_day_range_from_symbol_candidates,
         progress_scope=progress_scope,
     )
@@ -2693,6 +2731,9 @@ def _print_watchlist_snapshot(watchlist_name: str) -> int:
     fetch_symbols = list(dict.fromkeys([*symbols, benchmark_symbol]))
     snapshots, passes_used = _fetch_group_snapshots_with_retries(fetch_symbols)
     print()
+    freshness_line = _format_snapshot_freshness_line(snapshots, fetch_symbols)
+    if freshness_line:
+        print(freshness_line)
     print(f"{'Symbol':<16} {'Price':>12} {'Change':>18} {'Range':>18}")
     rows: list[tuple[str, str, str, float | None, float | None, str]] = []
     for symbol in symbols:
@@ -2972,6 +3013,32 @@ def _live_quote_payload_for_symbol(symbol: str) -> dict[str, Any]:
     return _get_quote_payload(symbol)
 
 
+def _overlay_market_price_on_closes(
+    symbol: str,
+    points: list[dt.datetime],
+    closes: list[float],
+    market_price: float | None,
+) -> tuple[list[dt.datetime], list[float]]:
+    """Overlay one close series with a supplied live market price."""
+    if not points or not closes or market_price is None:
+        return points, closes
+
+    tz, _oh, _om, _ch, _cm = _market_profile_for(symbol, None)
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    today_local = now_utc.astimezone(tz).date()
+    adjusted_points = list(points)
+    adjusted_closes = [float(close) for close in closes]
+    last_point = adjusted_points[-1]
+    if last_point.tzinfo is None:
+        last_point = last_point.replace(tzinfo=dt.timezone.utc)
+    if last_point.astimezone(tz).date() == today_local:
+        adjusted_closes[-1] = float(market_price)
+        return adjusted_points, adjusted_closes
+    adjusted_points.append(now_utc)
+    adjusted_closes.append(float(market_price))
+    return adjusted_points, adjusted_closes
+
+
 def _overlay_live_market_price_on_closes(
     symbol: str,
     points: list[dt.datetime],
@@ -2991,26 +3058,34 @@ def _overlay_live_market_price_on_closes(
     live_price = _coerce_float(live_info.get("regularMarketPrice"))
     if live_price is None:
         return points, closes
-
-    tz, _oh, _om, _ch, _cm = _market_profile_for(symbol, live_info)
-    now_utc = dt.datetime.now(dt.timezone.utc)
-    today_local = now_utc.astimezone(tz).date()
-    adjusted_points = list(points)
-    adjusted_closes = [float(close) for close in closes]
-    last_point = adjusted_points[-1]
-    if last_point.tzinfo is None:
-        last_point = last_point.replace(tzinfo=dt.timezone.utc)
-    if last_point.astimezone(tz).date() == today_local:
-        adjusted_closes[-1] = live_price
-        return adjusted_points, adjusted_closes
-    adjusted_points.append(now_utc)
-    adjusted_closes.append(live_price)
-    return adjusted_points, adjusted_closes
+    return _overlay_market_price_on_closes(symbol, points, closes, live_price)
 
 
-def _close_series_for_period(symbol: str, period_token: str) -> tuple[list[dt.datetime], list[float]]:
+def _batch_live_market_prices(symbols: list[str]) -> dict[str, float]:
+    """Fetch latest grouped market prices for open symbols from minute-bar batch data."""
+    open_symbols = [symbol for symbol in dict.fromkeys(symbols) if symbol and _is_market_open_now(symbol, None)]
+    if not open_symbols:
+        return _BatchLivePrices()
+    snapshots = _batch_index_snapshots(open_symbols)
+    prices: dict[str, float] = {}
+    for symbol in open_symbols:
+        snapshot = snapshots.get(symbol, {})
+        price = _coerce_float(snapshot.get("regularMarketPrice")) if isinstance(snapshot, dict) else None
+        if price is not None:
+            prices[symbol] = price
+    as_of_epoch, _used_intraday = _snapshot_freshness(snapshots, open_symbols)
+    return _BatchLivePrices(prices, as_of_epoch=as_of_epoch)
+
+
+def _close_series_for_period(
+    symbol: str,
+    period_token: str,
+    use_live_quote_overlay: bool = True,
+) -> tuple[list[dt.datetime], list[float]]:
     """Fetch one daily close series for period-level analytics commands."""
     points, closes = _fetch_close_points_for_token(symbol, period_token=period_token, interval="1d")
+    if not use_live_quote_overlay:
+        return points, closes
     return _overlay_live_market_price_on_closes(symbol, points, closes)
 
 
@@ -3066,7 +3141,17 @@ def _print_relret_snapshot(
         print("No benchmark available for relret in this context.", file=sys.stderr)
         return 3
 
-    _bench_points, bench_closes = _close_series_for_period(benchmark_symbol, period_token=period_token)
+    series_symbols = [benchmark_symbol, *symbols]
+    live_prices = _batch_live_market_prices(series_symbols)
+    series_map = {
+        symbol: _close_series_for_period(symbol, period_token=period_token, use_live_quote_overlay=False)
+        for symbol in dict.fromkeys(series_symbols)
+    }
+    for symbol, market_price in live_prices.items():
+        points, closes = series_map.get(symbol, ([], []))
+        series_map[symbol] = _overlay_market_price_on_closes(symbol, points, closes, market_price)
+
+    _bench_points, bench_closes = series_map.get(benchmark_symbol, ([], []))
     bench_ret = _period_return_from_closes(bench_closes)
     if bench_ret is None:
         print(f"No historical data for benchmark '{benchmark_symbol}' with period={period_token}.", file=sys.stderr)
@@ -3075,13 +3160,19 @@ def _print_relret_snapshot(
     label = period_token.upper()
     print()
     print(f"Relative Return ({label}) - {title} vs {benchmark_label} ({benchmark_symbol})")
+    freshness_line = _format_live_overlay_freshness_line(
+        getattr(live_prices, "as_of_epoch", None),
+        "Relative returns include live price overlay",
+    )
+    if freshness_line:
+        print(freshness_line)
     print(f"{'Symbol':<16} {'Return':>10} {'Bench':>10} {'RelRet':>10}")
 
     rows: list[tuple[str, str, str, str, float | None, int]] = []
     # Track valid stock returns so watchlist mode can print equal-weight summary vs benchmark.
     valid_returns: list[float] = []
     for idx, symbol in enumerate(symbols):
-        _points, closes = _close_series_for_period(symbol, period_token=period_token)
+        _points, closes = series_map.get(symbol, ([], []))
         ret = _period_return_from_closes(closes)
         if ret is None:
             rows.append((symbol, "n/a", f"{bench_ret:+.2f}%", "n/a", None, idx))
@@ -3135,9 +3226,17 @@ def _print_relret_snapshot(
     return 0
 
 
-def _daily_return_series_for_period(symbol: str, period_token: str) -> pd.Series | None:
+def _daily_return_series_for_period(
+    symbol: str,
+    period_token: str,
+    market_price: float | None = None,
+) -> pd.Series | None:
     """Return aligned daily percent-change series for correlation calculations."""
-    points, closes = _close_series_for_period(symbol, period_token=period_token)
+    if market_price is None:
+        points, closes = _close_series_for_period(symbol, period_token=period_token)
+    else:
+        points, closes = _close_series_for_period(symbol, period_token=period_token, use_live_quote_overlay=False)
+        points, closes = _overlay_market_price_on_closes(symbol, points, closes, market_price)
     if len(points) < 2 or len(points) != len(closes):
         return None
     idx = [int(point.timestamp()) for point in points]
@@ -3167,8 +3266,9 @@ def _print_corr_snapshot(
 
     aligned: list[pd.Series] = []
     names: list[str] = []
+    live_prices = _batch_live_market_prices(symbols)
     for symbol in symbols:
-        series = _daily_return_series_for_period(symbol, period_token=period_token)
+        series = _daily_return_series_for_period(symbol, period_token=period_token, market_price=live_prices.get(symbol))
         if series is None:
             continue
         aligned.append(series.rename(symbol))
@@ -3220,6 +3320,12 @@ def _print_corr_snapshot(
 
     print()
     print(f"Correlation Summary ({period_token.upper()}) - {title}")
+    freshness_line = _format_live_overlay_freshness_line(
+        getattr(live_prices, "as_of_epoch", None),
+        "Correlations include live price overlay",
+    )
+    if freshness_line:
+        print(freshness_line)
     print(f"Universe: {len(symbols)} symbols | overlap points: {frame.shape[0]}")
     _print_section("Most Positive Pairs", positives)
     _print_section("Most Negative Pairs", negatives)
@@ -3301,14 +3407,23 @@ def _print_moves_snapshot(
 
     days = _moves_days_for_period(period_token)
     period_label = period_token.upper()
+    live_prices = _batch_live_market_prices(symbols)
     print()
     print(f"Moves ({period_label}) - {title}")
+    freshness_line = _format_live_overlay_freshness_line(
+        getattr(live_prices, "as_of_epoch", None),
+        "Latest point overlaid with live price",
+    )
+    if freshness_line:
+        print(freshness_line)
     print(f"{'Symbol':<16} {f'{period_label} Moves':<12} Dots")
 
     rows: list[tuple[str, str, int | None, int]] = []
     lookback_days = max((days + 1) * 3, 30)
     for idx, symbol in enumerate(symbols):
-        _points, closes = _close_series_for_period(symbol, f"{lookback_days}d")
+        _points, closes = _close_series_for_period(symbol, f"{lookback_days}d", use_live_quote_overlay=False)
+        if symbol in live_prices:
+            _points, closes = _overlay_market_price_on_closes(symbol, _points, closes, live_prices[symbol])
         dots = quote_tools.recent_direction_dots_from_points(closes=closes, days=days, colorize=_colorize)
         green_days = _count_green_days_from_closes(closes=closes, days=days)
         rows.append((symbol, dots or "n/a", green_days, idx))
@@ -3326,9 +3441,13 @@ def _print_moves_snapshot(
     return 0
 
 
-def _trend_score_for_symbol(symbol: str) -> tuple[float | None, float | None]:
+def _trend_score_for_symbol(symbol: str, market_price: float | None = None) -> tuple[float | None, float | None]:
     """Compute trend score tuple `(score, total)` for one symbol using current daily context."""
-    points, closes = _close_series_for_period(symbol, period_token="1y")
+    if market_price is None:
+        points, closes = _close_series_for_period(symbol, period_token="1y")
+    else:
+        points, closes = _close_series_for_period(symbol, period_token="1y", use_live_quote_overlay=False)
+        points, closes = _overlay_market_price_on_closes(symbol, points, closes, market_price)
     if not closes:
         return None, None
     signal = quote_tools.quote_signal_snapshot(points=points, closes=closes, volumes=[])
@@ -3358,13 +3477,20 @@ def _print_trend_snapshot(
         if title is None or symbols is None:
             return 3
 
+    live_prices = _batch_live_market_prices(symbols)
     print()
     print(f"Trend (Current) - {title}")
+    freshness_line = _format_live_overlay_freshness_line(
+        getattr(live_prices, "as_of_epoch", None),
+        "Trend scores include live price overlay",
+    )
+    if freshness_line:
+        print(freshness_line)
     print(f"{'Symbol':<16} {'Trend Score':<16}")
 
     rows: list[tuple[str, str, float | None, int]] = []
     for idx, symbol in enumerate(symbols):
-        score, total = _trend_score_for_symbol(symbol=symbol)
+        score, total = _trend_score_for_symbol(symbol=symbol, market_price=live_prices.get(symbol))
         if score is None or total is None or total <= 0:
             rows.append((symbol, "n/a", None, idx))
             continue

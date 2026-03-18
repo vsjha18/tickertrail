@@ -408,28 +408,24 @@ Board sorting:
 - Same movement ordering as snap: greens first (largest gain to smallest), then reds (smallest fall to largest), then unknowns.
 - Use canonical index symbols for PSE/PSU BANK (`^CNXPSE`, `^CNXPSUBANK`) to avoid stale synthetic series.
 - For index boards, run one unified three-pass batch cycle across India+Global symbols, then per-symbol fallback only for unresolved rows.
-- Group snapshot fetches use daily batch candles (`5d`, `1d`) for price/prev/day-range to reduce call volume.
+- Group snapshot fetches use daily batch candles (`5d`, `1d`) plus intraday minute batch candles (`1d`, `1m`) so grouped views stay live without per-symbol quote fan-out.
+- During market hours, grouped views should use the batch minute-bar surface as the primary live path; retry missing symbols in later batch passes instead of switching to per-symbol quote fetches.
+- For known indices, keep one canonical app symbol and one explicit Yahoo fetch symbol; avoid runtime probe lists for stable mappings.
+- Grouped snapshot outputs (`index`, `snap`, watchlist snapshots) should print one freshness line under the title/header: `Live prices as of HH:MM` for intraday batch data, else `EOD data as of DD-MM-YY`.
 - In `index` board resolution, skip quote-based day-range enrichment during candidate selection; compute missing ranges in render path via intraday fallback.
+- If grouped batch resolution returns no row at all for an index-board entry, do one direct quote fetch for that row before rendering `n/a`.
 - If range is still missing in `index` board but `regularMarketPrice` and `regularMarketPreviousClose` exist, render a proxy range using `min(prev,last)` to `max(prev,last)`.
 - If `regularMarketPreviousClose` is missing but quote payload has `regularMarketChange` and `regularMarketChangePercent`, render change from those direct fields in index board rows.
 - If batch snapshot lacks both previous-close and direct-change fields for an index row, do one targeted quote fetch for that row to backfill change before rendering `n/a`.
 - Support shorthand nickname inference for index symbols (for example: `bank`, `pharma`, `infra`, `fmcg`, `metal`, `media`, `realty`, `energy`, `defence`/`defense`).
 - Include `cpse` as a shorthand alias for `NIFTY PSE` (`^CNXPSE`).
-- Keep grouped retry policy consistent across multi-symbol quote surfaces (`index`, `snap`, and future grouped views): max three batch attempts, then direct per-symbol `Ticker` fallback.
-- For `NIFTY DEFENCE` quote resolution, use `NIFTY_IND_DEFENCE.NS` as preferred fallback before canonical `^CNXDEFENCE`.
-- Keep fallback probes minimal and data-backed:
+- Keep grouped retry policy consistent across multi-symbol quote surfaces (`index`, `snap`, and future grouped views): pass1 full batch, pass2/3 missing-only batch retries, then render unresolved rows as unavailable.
+- Keep preferred Yahoo fetch mappings explicit and data-backed:
   - `^CNXMIDCAP` -> `NIFTY_MIDCAP_100.NS`
   - `^NIFTYNXT50` -> `NIFTY_NEXT_50.NS`
   - `^NSESMCP100` -> `NIFTY_SMLCAP_100.NS`
   - `^CNXDEFENCE` -> `NIFTY_IND_DEFENCE.NS`
-  - Do not retain unverified alternates for other indices when canonical symbol already returns stable daily data.
-- During per-symbol `Ticker` fallback, add small random pacing (10-20ms) and adaptive backoff on consecutive misses to reduce throttling.
-- Make fallback pacing runtime-configurable via `src/tickertrail/conf.json`:
-  - `ticker_fallback_jitter_min`
-  - `ticker_fallback_jitter_max`
-  - `ticker_fallback_backoff_step`
-  - `ticker_fallback_backoff_max`
-  - Prefer human-readable duration strings like `10ms`, `20ms`, `50ms`, `200ms`.
+  - Do not retain runtime probe lists for other indices when canonical symbols already return stable batch data.
 - For grouped fetch surfaces, show hash-only TTY activity (`#` on each network call) with no descriptive progress text.
 
 Range behavior:
@@ -448,7 +444,7 @@ snap behavior:
 - Regenerate India index constituent universes from Nifty public EquityStockWatch feeds (via `iislliveblob.niftyindices.com`) to keep lists complete.
 - Keep global snap constituents only for enabled global indices (currently `DOW JONES`).
 - For indices with known fixed membership sizes, show configured vs expected count and warn when local CSV data is incomplete.
-- Use shared group fetch policy: pass1 full batch, pass2/3 missing-only batch retries, then direct per-symbol `Ticker` fallback for unresolved rows.
+- Use shared group fetch policy: pass1 full batch, pass2/3 missing-only batch retries, then render unresolved rows as unavailable.
 - Print `Snap fetch passes used: <n>` at the end of snap output.
 
 moves behavior:
@@ -618,8 +614,14 @@ Keep it concise and factual.
 - If behavior changes, update help and tests in same patch.
 - REPL should tolerate pasted prompt fragments like `tt>...> command` by extracting the trailing command token.
 - Keep REPL controller state explicit: active symbol/watchlist prompt context should move together, and last-view replay metadata should use typed state instead of ad-hoc string/dict pairs.
-- Grouped snapshot views (`index`, `snap`, watchlist snapshots, index fallback quote payloads) should use live quote fields when available, then fall back to intraday batch price/range, then daily-close batch data.
-- Daily analytics commands that depend on the latest point (`move`, `trend`, `relret`, and derived current-period calculations) should overlay the current live quote onto the last daily history point while the market is open; when the market is closed they should stay on EOD history/cache data.
+- Grouped snapshot views (`index`, `snap`, watchlist snapshots, index fallback quote payloads) should use batch minute-bar data during market hours, then fall back to daily-close batch data.
+- During grouped market-hours fetches, do not use cached data; retry missing symbols via later batch passes only.
+- Daily analytics commands that depend on the latest point (`move`, `trend`, `relret`, `corr`, and derived current-period calculations) should overlay the current batch minute-market price onto the last daily history point while the market is open; when the market is closed they should stay on EOD history/cache data.
+- Daily analytics commands that use the live overlay should print one explicit freshness line with wording that matches the semantics:
+  - `move`: `Latest point overlaid with live price as of HH:MM`
+  - `trend`: `Trend scores include live price overlay as of HH:MM`
+  - `relret`: `Relative returns include live price overlay as of HH:MM`
+  - `corr`: `Correlations include live price overlay as of HH:MM`
 - Local CSV loaders (symbol universe/constituents) must handle `OSError` gracefully and fail soft.
 - For every command, print a final network footer line: total calls plus API breakdown (e.g. yfinance surfaces).
 - Footer must also include per-command history-cache stats (`hits` / `misses`) on the same line.

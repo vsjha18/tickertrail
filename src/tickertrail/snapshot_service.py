@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import io
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from typing import Any, Callable
@@ -16,7 +17,7 @@ def fetch_day_range_fallback(
     try:
         track_network_call("yfinance.download")
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            df = download_fn(symbol, period="1d", interval="5m", progress=False, auto_adjust=False)
+            df = download_fn(symbol, period="1d", interval="1m", progress=False, auto_adjust=False)
         if df.empty:
             return None, None
         lows = df["Low"]
@@ -91,6 +92,26 @@ def coerce_float(value: Any) -> float | None:
             return None
         return float(value)
     except (TypeError, ValueError):
+        return None
+
+
+def coerce_epoch_seconds(value: Any) -> float | None:
+    """Convert a datetime-like or numeric timestamp payload to epoch seconds."""
+    try:
+        if value is None:
+            return None
+        if isinstance(value, dt.datetime):
+            stamp = value
+        elif hasattr(value, "to_pydatetime"):
+            stamp = value.to_pydatetime()
+        elif isinstance(value, (int, float)):
+            return float(value)
+        else:
+            return None
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=dt.timezone.utc)
+        return float(stamp.timestamp())
+    except Exception:
         return None
 
 
@@ -176,7 +197,7 @@ def batch_index_snapshots(
     download_fn: Callable[..., pd.DataFrame],
     track_network_call: Callable[[str], None],
 ) -> dict[str, dict[str, float | None]]:
-    """Fetch grouped snapshots using intraday-last price with daily-close fallback."""
+    """Fetch grouped snapshots using minute bars with daily-close fallback."""
     snapshots: dict[str, dict[str, float | None]] = {
         sym: {
             "regularMarketPrice": None,
@@ -185,6 +206,8 @@ def batch_index_snapshots(
             "regularMarketDayHigh": None,
             "regularMarketChange": None,
             "regularMarketChangePercent": None,
+            "marketDataTimestamp": None,
+            "marketDataIsIntraday": None,
         }
         for sym in symbols
     }
@@ -204,7 +227,7 @@ def batch_index_snapshots(
     try:
         track_network_call("yfinance.download")
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            intraday = download_fn(symbol_str, period="1d", interval="5m", progress=False, auto_adjust=False)
+            intraday = download_fn(symbol_str, period="1d", interval="1m", progress=False, auto_adjust=False)
     except Exception:
         intraday = pd.DataFrame()
 
@@ -223,10 +246,16 @@ def batch_index_snapshots(
 
         if intraday_close_series is not None and len(intraday_close_series) >= 1:
             price = float(intraday_close_series.iloc[-1])
+            timestamp = coerce_epoch_seconds(intraday_close_series.index[-1])
+            is_intraday = 1.0
         elif close_series is not None and len(close_series) >= 1:
             price = float(close_series.iloc[-1])
+            timestamp = coerce_epoch_seconds(close_series.index[-1])
+            is_intraday = 0.0
         else:
             price = None
+            timestamp = None
+            is_intraday = None
 
         prev = float(close_series.iloc[-2]) if close_series is not None and len(close_series) >= 2 else None
 
@@ -253,46 +282,19 @@ def batch_index_snapshots(
             "regularMarketDayHigh": day_high,
             "regularMarketChange": change,
             "regularMarketChangePercent": change_pct,
+            "marketDataTimestamp": timestamp,
+            "marketDataIsIntraday": is_intraday,
         }
     return snapshots
-
-
-def overlay_live_quote_on_snapshot(snapshot: dict[str, float | None], info: dict[str, Any]) -> None:
-    """Overlay one snapshot with live quote fields when Yahoo quote data is available."""
-    price = coerce_float(info.get("regularMarketPrice"))
-    prev = coerce_float(info.get("regularMarketPreviousClose"))
-    change = coerce_float(info.get("regularMarketChange"))
-    change_pct = coerce_float(info.get("regularMarketChangePercent"))
-    day_low, day_high = extract_quote_day_range(info)
-
-    if price is not None:
-        snapshot["regularMarketPrice"] = price
-    if prev is not None:
-        snapshot["regularMarketPreviousClose"] = prev
-    if day_low is not None and day_high is not None and day_high > day_low:
-        snapshot["regularMarketDayLow"] = day_low
-        snapshot["regularMarketDayHigh"] = day_high
-
-    if change is None and price is not None and prev is not None and prev:
-        change = price - prev
-    if change_pct is None and change is not None and prev is not None and prev:
-        change_pct = (change / prev) * 100
-    if change is not None:
-        snapshot["regularMarketChange"] = change
-    if change_pct is not None:
-        snapshot["regularMarketChangePercent"] = change_pct
 
 
 def resolve_group_candidate_snapshots(
     candidate_map: dict[str, list[str]],
     batch_index_snapshots_fn: Callable[[list[str]], dict[str, dict[str, float | None]]],
-    get_quote_payload: Callable[[str], dict[str, Any]],
-    has_quote_data: Callable[[dict[str, Any]], bool],
-    ticker_fallback_pause: Callable[[int], None],
     enrich_day_range_from_symbol_candidates_fn: Callable[[list[str], dict[str, float | None]], None],
     progress_scope: Callable[[str], contextmanager[None]],
 ) -> tuple[dict[str, tuple[str, dict[str, float | None]]], int]:
-    """Resolve per-key snapshot via candidate fallbacks using 3 batch passes plus ticker fallback."""
+    """Resolve per-key snapshot via repeated batch passes over ordered candidates."""
     chosen: dict[str, tuple[str, dict[str, float | None]]] = {}
     if not candidate_map:
         return chosen, 0
@@ -337,41 +339,6 @@ def resolve_group_candidate_snapshots(
             if len(chosen) == len(candidate_map):
                 break
 
-        if len(chosen) < len(candidate_map):
-            misses = 0
-            for key, candidates in unresolved.items():
-                if key in chosen:
-                    continue
-                for candidate in candidates:
-                    if not candidate or " " in candidate:
-                        continue
-                    ticker_fallback_pause(misses)
-                    info = get_quote_payload(candidate)
-                    if not has_quote_data(info):
-                        misses += 1
-                        continue
-                    snapshots[candidate] = {
-                        "regularMarketPrice": coerce_float(info.get("regularMarketPrice")),
-                        "regularMarketPreviousClose": coerce_float(info.get("regularMarketPreviousClose")),
-                        "regularMarketDayLow": coerce_float(info.get("regularMarketDayLow")),
-                        "regularMarketDayHigh": coerce_float(info.get("regularMarketDayHigh")),
-                        "regularMarketChange": coerce_float(info.get("regularMarketChange")),
-                        "regularMarketChangePercent": coerce_float(info.get("regularMarketChangePercent")),
-                    }
-                    chosen[key] = (candidate, snapshots[candidate])
-                    misses = 0
-                    break
-
-        # Refresh displayed rows from the same live quote surface used by single-symbol quote.
-        for key, (chosen_symbol, snapshot) in list(chosen.items()):
-            if " " in chosen_symbol:
-                continue
-            info = get_quote_payload(chosen_symbol)
-            if not has_quote_data(info):
-                continue
-            overlay_live_quote_on_snapshot(snapshot, info)
-            chosen[key] = (chosen_symbol, snapshot)
-
         for key, (chosen_symbol, snapshot) in list(chosen.items()):
             enrich_day_range_from_symbol_candidates_fn(unresolved.get(key, [chosen_symbol]), snapshot)
 
@@ -381,13 +348,10 @@ def resolve_group_candidate_snapshots(
 def fetch_group_snapshots_with_retries(
     symbols: list[str],
     batch_index_snapshots_fn: Callable[[list[str]], dict[str, dict[str, float | None]]],
-    get_quote_payload: Callable[[str], dict[str, Any]],
-    has_quote_data: Callable[[dict[str, Any]], bool],
-    ticker_fallback_pause: Callable[[int], None],
     enrich_day_range_from_symbol_candidates_fn: Callable[[list[str], dict[str, float | None]], None],
     progress_scope: Callable[[str], contextmanager[None]],
 ) -> tuple[dict[str, dict[str, float | None]], int]:
-    """Fetch grouped snapshots with three batch passes then per-symbol quote fallback."""
+    """Fetch grouped snapshots with repeated batch retries over missing symbols."""
     snapshots: dict[str, dict[str, float | None]] = {}
     if not symbols:
         return snapshots, 0
@@ -406,35 +370,6 @@ def fetch_group_snapshots_with_retries(
             snapshots.update(fetched)
             passes_used = pass_idx + 1
             missing = _missing_symbols(snapshots, missing)
-
-        if missing:
-            consecutive_fallback_misses = 0
-            for sym in missing:
-                if " " in sym:
-                    continue
-                ticker_fallback_pause(consecutive_fallback_misses)
-                info = get_quote_payload(sym)
-                snapshots[sym] = {
-                    "regularMarketPrice": info.get("regularMarketPrice"),
-                    "regularMarketPreviousClose": info.get("regularMarketPreviousClose"),
-                    "regularMarketDayLow": info.get("regularMarketDayLow"),
-                    "regularMarketDayHigh": info.get("regularMarketDayHigh"),
-                    "regularMarketChange": info.get("regularMarketChange"),
-                    "regularMarketChangePercent": info.get("regularMarketChangePercent"),
-                }
-                if snapshots[sym].get("regularMarketPrice") is None:
-                    consecutive_fallback_misses += 1
-                else:
-                    consecutive_fallback_misses = 0
-
-        # Refresh resolved rows from live quote fields so grouped views match single-symbol quote mode.
-        for sym, snapshot in snapshots.items():
-            if snapshot.get("regularMarketPrice") is None or " " in sym:
-                continue
-            info = get_quote_payload(sym)
-            if not has_quote_data(info):
-                continue
-            overlay_live_quote_on_snapshot(snapshot, info)
 
         for sym, snapshot in snapshots.items():
             enrich_day_range_from_symbol_candidates_fn([sym], snapshot)

@@ -240,8 +240,11 @@ HCLTECH.NS               940.00     +0.20 (+0.02%)     [──────●─
 Snap fetch passes used: 1
 ```
 
-Grouped snapshot views (`index`, `snap`, and watchlist snapshots) use live quote fields when Yahoo exposes them, then fall back to intraday batch price/range, then daily-close batch data.
-Analytics that depend on the latest daily point, such as `move`, `trend`, and `relret`, overlay the current live quote during market hours and fall back to cached/EOD history when the market is closed.
+Grouped snapshot views (`index`, `snap`, and watchlist snapshots) use batched `download` minute bars during market hours, with missing symbols retried in later batch passes and no cached data in that live workflow. After market close they fall back to daily-close batch data.
+Analytics that depend on the latest daily point, such as `move`, `trend`, `relret`, and `corr`, overlay the current batched minute-market price during market hours and fall back to cached/EOD history when the market is closed.
+For supported indices that need a Yahoo-specific fetch code, TickerTrail keeps one explicit fetch-symbol mapping per index instead of probing multiple alternates at runtime.
+If the index board's grouped batch fetch comes back empty after an idle session, TickerTrail falls back to direct per-index quote fields for those rows instead of showing a board full of `n/a`.
+Grouped snapshot commands print one freshness line under the title or section header, and daily analytics commands print a live-overlay freshness line only when the latest daily point has been updated from minute-bar data.
 
 ### Swing Chart (`c`)
 
