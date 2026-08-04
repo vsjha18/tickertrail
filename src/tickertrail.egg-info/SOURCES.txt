@@ -1,3 +1,4 @@
+LICENSE
 README.md
 pyproject.toml
 src/tickertrail/__init__.py

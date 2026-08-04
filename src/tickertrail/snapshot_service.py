@@ -115,6 +115,61 @@ def coerce_epoch_seconds(value: Any) -> float | None:
         return None
 
 
+def session_date(value: Any) -> dt.date | None:
+    """Return the calendar date represented by one history index value."""
+    try:
+        if isinstance(value, dt.datetime):
+            return value.date()
+        if hasattr(value, "to_pydatetime"):
+            return value.to_pydatetime().date()
+    except Exception:
+        return None
+    return None
+
+
+def latest_session_series(series: pd.Series | None) -> pd.Series | None:
+    """Return only observations from the most recent calendar session."""
+    if series is None or series.empty:
+        return None
+    latest_date = session_date(series.index[-1])
+    if latest_date is None:
+        return series
+    session_mask = [session_date(index_value) == latest_date for index_value in series.index]
+    latest = series.loc[session_mask]
+    return latest if not latest.empty else series
+
+
+def previous_intraday_session_close(series: pd.Series | None) -> float | None:
+    """Return the last close from the session before the latest intraday session."""
+    if series is None or series.empty:
+        return None
+    latest_date = session_date(series.index[-1])
+    if latest_date is None:
+        return None
+    prior_mask = [
+        index_date is not None and index_date < latest_date
+        for index_date in (session_date(index_value) for index_value in series.index)
+    ]
+    prior = series.loc[prior_mask]
+    return float(prior.iloc[-1]) if not prior.empty else None
+
+
+def daily_previous_close(
+    series: pd.Series | None,
+    current_session_date: dt.date | None,
+) -> float | None:
+    """Select the daily close immediately before the active price session."""
+    if series is None or series.empty:
+        return None
+    if current_session_date is None:
+        return float(series.iloc[-2]) if len(series) >= 2 else None
+    latest_daily_date = session_date(series.index[-1])
+    # Yahoo may include today's partial daily candle or stop at the prior session.
+    if latest_daily_date == current_session_date:
+        return float(series.iloc[-2]) if len(series) >= 2 else None
+    return float(series.iloc[-1])
+
+
 def parse_day_range_text(value: Any) -> tuple[float | None, float | None]:
     """Parse textual day-range payloads like '31800.0 - 32100.5'."""
     text = str(value).strip() if value is not None else ""
@@ -197,7 +252,7 @@ def batch_index_snapshots(
     download_fn: Callable[..., pd.DataFrame],
     track_network_call: Callable[[str], None],
 ) -> dict[str, dict[str, float | None]]:
-    """Fetch grouped snapshots using minute bars with daily-close fallback."""
+    """Fetch grouped snapshots using two minute sessions with daily fallback."""
     snapshots: dict[str, dict[str, float | None]] = {
         sym: {
             "regularMarketPrice": None,
@@ -227,7 +282,7 @@ def batch_index_snapshots(
     try:
         track_network_call("yfinance.download")
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            intraday = download_fn(symbol_str, period="1d", interval="1m", progress=False, auto_adjust=False)
+            intraday = download_fn(symbol_str, period="2d", interval="1m", progress=False, auto_adjust=False)
     except Exception:
         intraday = pd.DataFrame()
 
@@ -244,9 +299,14 @@ def batch_index_snapshots(
         if close_series is None and intraday_close_series is None:
             continue
 
+        # Keep price/range on the latest session and use the prior minute session
+        # as the previous close when Yahoo's daily history has a missing row.
+        current_intraday_close = latest_session_series(intraday_close_series)
+        current_intraday_low = latest_session_series(intraday_low_series)
+        current_intraday_high = latest_session_series(intraday_high_series)
         if intraday_close_series is not None and len(intraday_close_series) >= 1:
-            price = float(intraday_close_series.iloc[-1])
-            timestamp = coerce_epoch_seconds(intraday_close_series.index[-1])
+            price = float(current_intraday_close.iloc[-1])
+            timestamp = coerce_epoch_seconds(current_intraday_close.index[-1])
             is_intraday = 1.0
         elif close_series is not None and len(close_series) >= 1:
             price = float(close_series.iloc[-1])
@@ -257,17 +317,20 @@ def batch_index_snapshots(
             timestamp = None
             is_intraday = None
 
-        prev = float(close_series.iloc[-2]) if close_series is not None and len(close_series) >= 2 else None
+        current_date = session_date(current_intraday_close.index[-1]) if current_intraday_close is not None else None
+        prev = previous_intraday_session_close(intraday_close_series)
+        if prev is None:
+            prev = daily_previous_close(close_series, current_date)
 
-        if intraday_low_series is not None and len(intraday_low_series) >= 1:
-            day_low = float(min(intraday_low_series.tolist()))
+        if current_intraday_low is not None and len(current_intraday_low) >= 1:
+            day_low = float(min(current_intraday_low.tolist()))
         elif daily_low_series is not None and len(daily_low_series) >= 1:
             day_low = float(daily_low_series.iloc[-1])
         else:
             day_low = None
 
-        if intraday_high_series is not None and len(intraday_high_series) >= 1:
-            day_high = float(max(intraday_high_series.tolist()))
+        if current_intraday_high is not None and len(current_intraday_high) >= 1:
+            day_high = float(max(current_intraday_high.tolist()))
         elif daily_high_series is not None and len(daily_high_series) >= 1:
             day_high = float(daily_high_series.iloc[-1])
         else:

@@ -89,18 +89,27 @@ class HelperBehaviorTests(unittest.TestCase):
     def test_load_nse_universe_and_search(self):
         with tempfile.TemporaryDirectory() as td:
             csv_path = Path(td) / "nse.csv"
+            supplement_path = Path(td) / "supplement.csv"
             csv_path.write_text("SYMBOL,NAME OF COMPANY\nSBIN,STATE BANK OF INDIA\nBEL,BHARAT ELECTRONICS LTD\n", encoding="utf-8")
+            supplement_path.write_text(
+                "SYMBOL,NAME OF COMPANY\nITBEES,NIPPON INDIA ETF NIFTY IT\nBEL,DUPLICATE BEL ROW\n",
+                encoding="utf-8",
+            )
             old = cli._NSE_UNIVERSE_CSV
+            old_supplement = cli._NSE_SUPPLEMENTAL_UNIVERSE_CSV
             old_cache = cli._NSE_UNIVERSE_CACHE
             try:
                 cli._NSE_UNIVERSE_CACHE = None
                 cli._NSE_UNIVERSE_CSV = csv_path
+                cli._NSE_SUPPLEMENTAL_UNIVERSE_CSV = supplement_path
                 rows = cli._load_nse_universe()
-                self.assertEqual(len(rows), 2)
+                self.assertEqual(len(rows), 3)
                 options = cli._search_symbol_options("bank")
                 self.assertTrue(any("SBIN.NS" == o["symbol"] for o in options))
+                self.assertTrue(any(row["symbol"] == "ITBEES" for row in rows))
             finally:
                 cli._NSE_UNIVERSE_CSV = old
+                cli._NSE_SUPPLEMENTAL_UNIVERSE_CSV = old_supplement
                 cli._NSE_UNIVERSE_CACHE = old_cache
 
     @patch("tickertrail.cli.yf.Ticker")
@@ -372,6 +381,25 @@ class HelperBehaviorTests(unittest.TestCase):
                 self.assertEqual((rc_rm_missing, removed_missing, not_present), (2, [], ["TCS"]))
             finally:
                 cli._WATCHLIST_DB_JSON = old_db
+
+    def test_watchlist_add_accepts_bundled_itbees_symbol(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "db.json"
+            old_db = cli._WATCHLIST_DB_JSON
+            old_cache = cli._NSE_UNIVERSE_CACHE
+            try:
+                cli._WATCHLIST_DB_JSON = db_path
+                cli._NSE_UNIVERSE_CACHE = None
+                rc_create, _msg_create = cli._create_watchlist("sharekhan")
+                self.assertEqual(rc_create, 0)
+
+                rc_add, added, rejected, existing = cli._add_symbols_to_watchlist("sharekhan", ["itbees"])
+
+                self.assertEqual((rc_add, added, rejected, existing), (0, ["ITBEES.NS"], [], []))
+                self.assertEqual(cli._watchlist_symbols("sharekhan"), ["ITBEES.NS"])
+            finally:
+                cli._WATCHLIST_DB_JSON = old_db
+                cli._NSE_UNIVERSE_CACHE = old_cache
 
     def test_load_watchlists_result_retries_after_transient_json_error(self):
         with tempfile.TemporaryDirectory() as td:
@@ -862,7 +890,7 @@ class RenderBehaviorTests(unittest.TestCase):
         with patch("sys.stdout", new_callable=io.StringIO) as out:
             rc = cli._print_index_board()
             self.assertEqual(rc, 0)
-            self.assertIn("India", out.getvalue())
+            self.assertTrue(out.getvalue().startswith("India"))
             self.assertIn("NIFTY INFRA", out.getvalue())
             self.assertIn("NIFTY DEFENCE", out.getvalue())
             self.assertIn("NIFTY NEXT 50", out.getvalue())
@@ -895,7 +923,7 @@ class RenderBehaviorTests(unittest.TestCase):
         with patch("sys.stdout", new_callable=io.StringIO) as out:
             rc = cli._print_index_board()
         self.assertEqual(rc, 0)
-        self.assertIn("Live prices as of", out.getvalue())
+        self.assertIn("India (Live prices as of", out.getvalue())
 
     @patch("tickertrail.cli._fetch_day_range_fallback", return_value=(None, None))
     @patch("tickertrail.cli._has_quote_data", return_value=True)
@@ -1070,6 +1098,7 @@ class RenderBehaviorTests(unittest.TestCase):
 
 
 class MainAndReplBehaviorTests(unittest.TestCase):
+    @patch("tickertrail.cli._print_index_board", return_value=0)
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._print_quote", return_value=0)
     @patch("tickertrail.cli._render_compare_table", return_value=0)
@@ -1094,6 +1123,7 @@ class MainAndReplBehaviorTests(unittest.TestCase):
         _mock_compare,
         _mock_print_quote,
         _mock_hist,
+        mock_index_board,
     ):
         cmds = [
             "h",
@@ -1130,6 +1160,7 @@ class MainAndReplBehaviorTests(unittest.TestCase):
                 height=20,
             )
         self.assertEqual(rc, 0)
+        mock_index_board.assert_called_once_with()
 
     @patch("tickertrail.cli._run_repl", return_value=0)
     @patch("tickertrail.cli._resolve_symbol_with_fallback", return_value=("AAPL", {"regularMarketPrice": 1.0}))

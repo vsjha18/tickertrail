@@ -141,18 +141,31 @@ class BranchHelperTests(unittest.TestCase):
         mock_fallback.assert_not_called()
 
     def test_read_conf_duration_seconds_formats(self):
+        class FloatLike:
+            def __float__(self):
+                """Return a valid duration for generic scalar coercion."""
+                return 0.3
+
         payload = {
             "ms": "25ms",
             "s": "0.4s",
             "num": 0.2,
             "neg": "-1ms",
             "bad": "nope",
+            "float_like": FloatLike(),
+            "object": object(),
         }
         self.assertEqual(cli._read_conf_duration_seconds(payload, "ms"), 0.025)
         self.assertEqual(cli._read_conf_duration_seconds(payload, "s"), 0.4)
         self.assertEqual(cli._read_conf_duration_seconds(payload, "num"), 0.2)
         self.assertEqual(cli._read_conf_duration_seconds(payload, "neg"), 0.0)
         self.assertEqual(cli._read_conf_duration_seconds(payload, "bad"), 0.0)
+        self.assertEqual(cli._read_conf_duration_seconds(payload, "float_like"), 0.3)
+        self.assertEqual(cli._read_conf_duration_seconds(payload, "object"), 0.0)
+
+    def test_validate_watchlist_symbol_rejects_empty_base_without_loading_universe(self):
+        self.assertIsNone(cli._validate_watchlist_symbol(""))
+        self.assertIsNone(cli._validate_watchlist_symbol(".NS"))
 
     @patch("tickertrail.cli._progress_stop")
     @patch("tickertrail.cli._progress_start")
@@ -161,7 +174,8 @@ class BranchHelperTests(unittest.TestCase):
         return_value={"A.NS": {"regularMarketPrice": 10.0}, "B.NS": {"regularMarketPrice": 11.0}},
     )
     def test_fetch_group_snapshots_wraps_progress_scope(self, _mock_batch, mock_start, mock_stop):
-        snaps, passes = cli._fetch_group_snapshots_with_retries(["A.NS", "B.NS"])
+        with patch("tickertrail.cli._enrich_snapshot_day_range_from_symbol_candidates"):
+            snaps, passes = cli._fetch_group_snapshots_with_retries(["A.NS", "B.NS"])
         self.assertEqual(passes, 1)
         self.assertEqual(snaps["A.NS"]["regularMarketPrice"], 10.0)
         self.assertEqual(snaps["B.NS"]["regularMarketPrice"], 11.0)
@@ -170,7 +184,8 @@ class BranchHelperTests(unittest.TestCase):
 
     @patch("tickertrail.cli._batch_index_snapshots", return_value={"A.NS": {"regularMarketPrice": 10.0, "regularMarketPreviousClose": 9.0}})
     def test_fetch_group_snapshots_keeps_batch_price_for_resolved_rows(self, _mock_batch):
-        snaps, passes = cli._fetch_group_snapshots_with_retries(["A.NS"])
+        with patch("tickertrail.cli._enrich_snapshot_day_range_from_symbol_candidates"):
+            snaps, passes = cli._fetch_group_snapshots_with_retries(["A.NS"])
         self.assertEqual(passes, 1)
         self.assertEqual(snaps["A.NS"]["regularMarketPrice"], 10.0)
         self.assertEqual(snaps["A.NS"]["regularMarketPreviousClose"], 9.0)
@@ -179,7 +194,8 @@ class BranchHelperTests(unittest.TestCase):
     @patch("tickertrail.cli._progress_start")
     @patch("tickertrail.cli._batch_index_snapshots", return_value={"^NSEI": {"regularMarketPrice": 10.0}})
     def test_resolve_group_candidate_snapshots_wraps_progress_scope(self, _mock_batch, mock_start, mock_stop):
-        out, passes = cli._resolve_group_candidate_snapshots({"^NSEI": ["^NSEI"]})
+        with patch("tickertrail.cli._enrich_snapshot_day_range_from_symbol_candidates"):
+            out, passes = cli._resolve_group_candidate_snapshots({"^NSEI": ["^NSEI"]})
         self.assertEqual(passes, 1)
         self.assertIn("^NSEI", out)
         mock_start.assert_called_once_with("Resolving index board")
@@ -190,7 +206,8 @@ class BranchHelperTests(unittest.TestCase):
         self,
         _mock_batch,
     ):
-        out, passes = cli._resolve_group_candidate_snapshots({"^NSEI": ["^NSEI"]})
+        with patch("tickertrail.cli._enrich_snapshot_day_range_from_symbol_candidates"):
+            out, passes = cli._resolve_group_candidate_snapshots({"^NSEI": ["^NSEI"]})
         self.assertEqual(passes, 1)
         self.assertEqual(out["^NSEI"][1]["regularMarketPrice"], 10.0)
         self.assertEqual(out["^NSEI"][1]["regularMarketPreviousClose"], 9.0)
@@ -365,31 +382,39 @@ class BranchHelperTests(unittest.TestCase):
 
     def test_load_nse_universe_missing_file_and_skip_invalid_rows(self):
         old_csv = cli._NSE_UNIVERSE_CSV
+        old_supplement = cli._NSE_SUPPLEMENTAL_UNIVERSE_CSV
         old_cache = cli._NSE_UNIVERSE_CACHE
         try:
             cli._NSE_UNIVERSE_CACHE = None
             cli._NSE_UNIVERSE_CSV = cli.Path("/tmp/does_not_exist_scan_test.csv")
+            cli._NSE_SUPPLEMENTAL_UNIVERSE_CSV = cli.Path("/tmp/does_not_exist_scan_test_supplement.csv")
             self.assertEqual(cli._load_nse_universe(), [])
             with tempfile.TemporaryDirectory() as td:
                 csv_path = cli.Path(td) / "nse.csv"
+                supplement_path = cli.Path(td) / "supplement.csv"
                 csv_path.write_text(
                     "SYMBOL,NAME OF COMPANY\nGOOD,GOOD LTD\nBAD,\n,EMPTY\n",
                     encoding="utf-8",
                 )
+                supplement_path.write_text("SYMBOL,NAME OF COMPANY\nETFONE,ETF ONE\n", encoding="utf-8")
                 cli._NSE_UNIVERSE_CACHE = None
                 cli._NSE_UNIVERSE_CSV = csv_path
+                cli._NSE_SUPPLEMENTAL_UNIVERSE_CSV = supplement_path
                 rows = cli._load_nse_universe()
-                self.assertEqual(rows, [{"symbol": "GOOD", "name": "GOOD LTD"}])
+                self.assertEqual(rows, [{"symbol": "GOOD", "name": "GOOD LTD"}, {"symbol": "ETFONE", "name": "ETF ONE"}])
         finally:
             cli._NSE_UNIVERSE_CSV = old_csv
+            cli._NSE_SUPPLEMENTAL_UNIVERSE_CSV = old_supplement
             cli._NSE_UNIVERSE_CACHE = old_cache
 
     def test_load_nse_universe_oserror_guard(self):
         old_cache = cli._NSE_UNIVERSE_CACHE
         old_csv = cli._NSE_UNIVERSE_CSV
+        old_supplement = cli._NSE_SUPPLEMENTAL_UNIVERSE_CSV
         try:
             cli._NSE_UNIVERSE_CACHE = None
             cli._NSE_UNIVERSE_CSV = cli.Path("/tmp/nse_open_oserror.csv")
+            cli._NSE_SUPPLEMENTAL_UNIVERSE_CSV = cli.Path("/tmp/nse_open_oserror_supplement.csv")
             with patch.object(cli.Path, "exists", return_value=True), patch.object(
                 cli.Path, "open", side_effect=OSError("too many open files")
             ):
@@ -397,6 +422,7 @@ class BranchHelperTests(unittest.TestCase):
         finally:
             cli._NSE_UNIVERSE_CACHE = old_cache
             cli._NSE_UNIVERSE_CSV = old_csv
+            cli._NSE_SUPPLEMENTAL_UNIVERSE_CSV = old_supplement
 
     def test_period_days_units(self):
         self.assertEqual(cli._period_token_days("7d"), 7)
@@ -1329,7 +1355,9 @@ class BranchHelperTests(unittest.TestCase):
     @patch("tickertrail.cli._close_series_for_period")
     def test_print_relret_snapshot_no_benchmark_history(self, mock_close, _mock_bench, _mock_targets):
         mock_close.return_value = ([], [100.0])  # benchmark insufficient
-        with patch("sys.stderr", new_callable=io.StringIO) as err:
+        with patch("tickertrail.cli._batch_live_market_prices", return_value={}), patch(
+            "sys.stderr", new_callable=io.StringIO
+        ) as err:
             rc = cli._print_relret_snapshot(None, None, "1mo")
         self.assertEqual(rc, 3)
         self.assertIn("no historical data for benchmark", err.getvalue().lower())
@@ -1345,7 +1373,9 @@ class BranchHelperTests(unittest.TestCase):
             (points, [100.0, 105.0]),  # A
             (points, [100.0, 101.0]),  # B
         ]
-        with patch("sys.stdout", new_callable=io.StringIO) as out:
+        with patch("tickertrail.cli._batch_live_market_prices", return_value={}), patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as out:
             rc = cli._print_relret_snapshot(current_symbol="^IXIC", active_watchlist=None, period_token="1mo")
         self.assertEqual(rc, 0)
         self.assertNotIn("WATCHLIST(EW)", out.getvalue())
@@ -1556,7 +1586,8 @@ class BranchHelperTests(unittest.TestCase):
             return {sym: {"regularMarketPrice": None} for sym in symbols}
 
         mock_batch.side_effect = _fake_batch
-        snaps, passes = cli._fetch_group_snapshots_with_retries(["A.NS", "B.NS"])
+        with patch("tickertrail.cli._enrich_snapshot_day_range_from_symbol_candidates"):
+            snaps, passes = cli._fetch_group_snapshots_with_retries(["A.NS", "B.NS"])
         self.assertEqual(passes, 3)
         self.assertIsNone(snaps["B.NS"]["regularMarketPrice"])
         self.assertEqual(mock_batch.call_args_list[0].args[0], ["A.NS", "B.NS"])
@@ -1596,7 +1627,8 @@ class BranchHelperTests(unittest.TestCase):
             return {sym: {"regularMarketPrice": None} for sym in symbols}
 
         mock_batch.side_effect = _fake_batch
-        snaps, passes = cli._fetch_group_snapshots_with_retries(["A.NS", "B.NS"])
+        with patch("tickertrail.cli._enrich_snapshot_day_range_from_symbol_candidates"):
+            snaps, passes = cli._fetch_group_snapshots_with_retries(["A.NS", "B.NS"])
         self.assertEqual(passes, 3)
         self.assertIsNone(snaps["B.NS"]["regularMarketPrice"])
 
@@ -1628,6 +1660,126 @@ class BranchHelperTests(unittest.TestCase):
         self.assertEqual(snaps["^NSEI"]["regularMarketDayHigh"], 104.5)
         self.assertEqual(snaps["^NSEI"]["marketDataIsIntraday"], 1.0)
         self.assertIsNotNone(snaps["^NSEI"]["marketDataTimestamp"])
+
+    @patch("tickertrail.cli.yf.download")
+    def test_batch_index_snapshots_uses_prior_intraday_session_when_daily_history_has_gap(self, mock_dl):
+        daily_index = pd.to_datetime(["2026-07-29", "2026-07-30", "2026-07-31", "2026-08-04"], utc=True)
+        daily_df = pd.DataFrame(
+            {
+                ("Close", "TCS.NS"): [2446.6, 2431.8, 2365.6, 2453.6],
+                ("Low", "TCS.NS"): [2415.1, 2423.0, 2326.1, 2435.1],
+                ("High", "TCS.NS"): [2475.5, 2495.0, 2391.0, 2467.4],
+            },
+            index=daily_index,
+        )
+        intraday_index = pd.to_datetime(
+            [
+                "2026-08-03 09:15+05:30",
+                "2026-08-03 15:30+05:30",
+                "2026-08-04 09:15+05:30",
+                "2026-08-04 12:52+05:30",
+            ],
+            utc=True,
+        )
+        intraday_df = pd.DataFrame(
+            {
+                ("Close", "TCS.NS"): [2399.7, 2473.7, 2463.1, 2453.6],
+                ("Low", "TCS.NS"): [2389.8, 2395.0, 2435.1, 2450.0],
+                ("High", "TCS.NS"): [2410.0, 2473.7, 2467.4, 2456.0],
+            },
+            index=intraday_index,
+        )
+        mock_dl.side_effect = [daily_df, intraday_df]
+
+        snaps = cli._batch_index_snapshots(["TCS.NS"])
+
+        self.assertEqual(mock_dl.call_args_list[1].kwargs["period"], "2d")
+        self.assertEqual(snaps["TCS.NS"]["regularMarketPrice"], 2453.6)
+        self.assertEqual(snaps["TCS.NS"]["regularMarketPreviousClose"], 2473.7)
+        self.assertAlmostEqual(snaps["TCS.NS"]["regularMarketChange"], -20.1)
+        self.assertAlmostEqual(snaps["TCS.NS"]["regularMarketChangePercent"], (-20.1 / 2473.7) * 100)
+        self.assertEqual(snaps["TCS.NS"]["regularMarketDayLow"], 2435.1)
+        self.assertEqual(snaps["TCS.NS"]["regularMarketDayHigh"], 2467.4)
+
+    def test_snapshot_session_helpers_cover_missing_and_stale_daily_paths(self):
+        service = cli.snapshot_service
+        self.assertIsNone(service.session_date(object()))
+        self.assertIsNone(service.latest_session_series(None))
+        undated = pd.Series([1.0, 2.0], index=[1, 2])
+        self.assertIs(service.latest_session_series(undated), undated)
+        self.assertIsNone(service.previous_intraday_session_close(None))
+        self.assertIsNone(service.previous_intraday_session_close(undated))
+
+        one_daily = pd.Series([101.0], index=pd.to_datetime(["2026-08-03"], utc=True))
+        two_daily = pd.Series([100.0, 101.0], index=pd.to_datetime(["2026-08-02", "2026-08-03"], utc=True))
+        self.assertIsNone(service.daily_previous_close(None, None))
+        self.assertIsNone(service.daily_previous_close(one_daily, None))
+        self.assertEqual(service.daily_previous_close(two_daily, None), 100.0)
+        self.assertEqual(service.daily_previous_close(two_daily, dt.date(2026, 8, 4)), 101.0)
+        self.assertIsNone(service.daily_previous_close(one_daily, dt.date(2026, 8, 3)))
+
+    def test_snapshot_service_guardrails_cover_malformed_and_empty_inputs(self):
+        service = cli.snapshot_service
+
+        class DatetimeLike:
+            def to_pydatetime(self):
+                """Return a fixed datetime for timestamp coercion tests."""
+                return dt.datetime(2026, 8, 4, 9, 15)
+
+        class BrokenDatetimeLike:
+            def to_pydatetime(self):
+                """Raise to exercise malformed timestamp guardrails."""
+                raise ValueError("bad timestamp")
+
+        self.assertIsNotNone(service.coerce_epoch_seconds(DatetimeLike()))
+        self.assertIsNotNone(service.coerce_epoch_seconds(dt.datetime(2026, 8, 4, 9, 15)))
+        self.assertIsNone(service.coerce_epoch_seconds(object()))
+        self.assertIsNone(service.coerce_epoch_seconds(BrokenDatetimeLike()))
+        self.assertEqual(service.session_date(DatetimeLike()), dt.date(2026, 8, 4))
+        self.assertIsNone(service.session_date(BrokenDatetimeLike()))
+        self.assertFalse(service.has_usable_day_range({"regularMarketDayLow": "bad", "regularMarketDayHigh": 2.0}))
+        self.assertIsNone(service.coerce_float("bad"))
+        self.assertEqual(service.parse_day_range_text("1-2"), (1.0, 2.0))
+        self.assertEqual(service.parse_day_range_text("bad"), (None, None))
+        self.assertEqual(service.parse_day_range_text("2-1"), (None, None))
+
+        quote = MagicMock(return_value={"regularMarketDayLow": 1.0, "regularMarketDayHigh": 2.0})
+        service.enrich_snapshot_day_range_from_quote("X", {"regularMarketPrice": None}, quote)
+        service.enrich_snapshot_day_range_from_quote(
+            "X",
+            {"regularMarketPrice": 1.5, "regularMarketDayLow": 1.0, "regularMarketDayHigh": 2.0},
+            quote,
+        )
+        quote.assert_not_called()
+
+        candidate_fetch = MagicMock(return_value=(None, None))
+        self.assertEqual(service.fetch_day_range_fallback_candidates(["", "X", "X"], candidate_fetch), (None, None))
+        enrich = MagicMock()
+        service.enrich_snapshot_day_range_from_symbol_candidates(
+            ["", "X", "X"],
+            {"regularMarketPrice": 1.0, "regularMarketDayLow": None, "regularMarketDayHigh": None},
+            enrich,
+        )
+        enrich.assert_called_once_with("X", unittest.mock.ANY)
+
+        malformed_columns = pd.MultiIndex.from_tuples([("X", "Close")])
+        malformed_frame = pd.DataFrame([[1.0]], columns=malformed_columns)
+        self.assertIsNone(service.series_for_symbol_field(malformed_frame, "X", "Low"))
+
+        dated_index = pd.to_datetime(["2026-08-03", "2026-08-04"], utc=True)
+        no_close = pd.DataFrame({("Low", "X"): [1.0, 2.0], ("High", "X"): [2.0, 3.0]}, index=dated_index)
+        close_only = pd.DataFrame({("Close", "X"): [1.0, 2.0]}, index=dated_index)
+        empty = pd.DataFrame()
+        no_price = service.batch_index_snapshots("X".split(), MagicMock(side_effect=[no_close, empty]), MagicMock())
+        self.assertIsNone(no_price["X"]["regularMarketPrice"])
+        daily_only = service.batch_index_snapshots("X".split(), MagicMock(side_effect=[close_only, empty]), MagicMock())
+        self.assertIsNone(daily_only["X"]["regularMarketDayLow"])
+        self.assertIsNone(daily_only["X"]["regularMarketDayHigh"])
+
+        resolved, passes = service.resolve_group_candidate_snapshots({}, MagicMock(), MagicMock(), cli._silent_progress_scope)
+        self.assertEqual((resolved, passes), ({}, 0))
+        snapshots, passes = service.fetch_group_snapshots_with_retries([], MagicMock(), MagicMock(), cli._silent_progress_scope)
+        self.assertEqual((snapshots, passes), ({}, 0))
 
     @patch("tickertrail.cli.yf.download")
     def test_batch_index_snapshots_falls_back_to_daily_when_intraday_batch_unavailable(self, mock_dl):
@@ -1874,12 +2026,12 @@ class BranchHelperTests(unittest.TestCase):
                 rc = cli._print_index_constituent_snap("^NSEI")
                 txt = out.getvalue()
             self.assertEqual(rc, 0)
-            self.assertIn("Snap: TEST INDEX", txt)
+            self.assertTrue(txt.startswith("Snap: TEST INDEX"))
             self.assertIn("A.NS", txt)
             self.assertIn("B.NS", txt)
             self.assertIn("Range", txt)
             self.assertIn("[", txt)
-            self.assertIn("Live prices as of", txt)
+            self.assertIn("Snap: TEST INDEX (4 configured / 50 expected) (Live prices as of", txt)
             # Green rows first (D then A), then red rows by smallest fall first (C then B).
             self.assertLess(txt.index("D.NS"), txt.index("A.NS"))
             self.assertLess(txt.index("A.NS"), txt.index("C.NS"))
@@ -1954,7 +2106,7 @@ class BranchHelperTests(unittest.TestCase):
             with patch("sys.stdout", new_callable=io.StringIO) as out, patch("sys.stderr", new_callable=io.StringIO) as err:
                 rc = cli._print_index_constituent_snap("^NSEMDCP50")
             self.assertEqual(rc, 0)
-            self.assertIn("Snap: NIFTY MIDCAP SELECT (index-only)", out.getvalue())
+            self.assertIn("Snap: NIFTY MIDCAP SELECT (index-only", out.getvalue())
             self.assertIn("^NSEMDCP50", out.getvalue())
             self.assertIn("Constituent universe unavailable", err.getvalue())
         finally:
@@ -2002,7 +2154,9 @@ class BranchHelperTests(unittest.TestCase):
         old = cli._SNAP_UNIVERSE_CACHE
         try:
             cli._SNAP_UNIVERSE_CACHE = {"^NSEI": ("TEST INDEX", ("A.NS", "B.NS"))}
-            with patch("sys.stdout", new_callable=io.StringIO) as out:
+            with patch("tickertrail.cli._enrich_snapshot_day_range_from_symbol_candidates"), patch(
+                "sys.stdout", new_callable=io.StringIO
+            ) as out:
                 rc = cli._print_index_constituent_snap("^NSEI")
                 txt = out.getvalue()
             self.assertEqual(rc, 0)

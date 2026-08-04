@@ -53,7 +53,7 @@ Core commands:
 - while in watchlist mode, typing a symbol switches to stock quote mode and exits watchlist mode.
 - `add <code...>`: add validated stock codes in active watchlist mode.
   - when a symbol already exists in the active watchlist, print an explicit "already exists" message.
-  - validate using local NSE universe data only (no network fetches while adding).
+  - validate using bundled local NSE universe data only (no network fetches while adding), merging the main equity CSV with a curated supplemental symbol list for ETF/fund coverage.
 - `delete <code...>`: remove symbols from active watchlist mode.
 - `list` in watchlist mode: print symbols in current watchlist.
 - `snap` in watchlist mode: show snapshot for symbols in that watchlist.
@@ -408,10 +408,11 @@ Board sorting:
 - Same movement ordering as snap: greens first (largest gain to smallest), then reds (smallest fall to largest), then unknowns.
 - Use canonical index symbols for PSE/PSU BANK (`^CNXPSE`, `^CNXPSUBANK`) to avoid stale synthetic series.
 - For index boards, run one unified three-pass batch cycle across India+Global symbols, then per-symbol fallback only for unresolved rows.
-- Group snapshot fetches use daily batch candles (`5d`, `1d`) plus intraday minute batch candles (`1d`, `1m`) so grouped views stay live without per-symbol quote fan-out.
+- Group snapshot fetches use daily batch candles (`5d`, `1d`) plus two intraday minute sessions (`2d`, `1m`) so grouped views stay live without per-symbol quote fan-out.
+- Derive grouped previous close from the final bar of the prior minute session when available, falling back to the daily series with awareness of whether its last row is today's partial candle; restrict live price and day range to the latest minute session.
 - During market hours, grouped views should use the batch minute-bar surface as the primary live path; retry missing symbols in later batch passes instead of switching to per-symbol quote fetches.
 - For known indices, keep one canonical app symbol and one explicit Yahoo fetch symbol; avoid runtime probe lists for stable mappings.
-- Grouped snapshot outputs (`index`, `snap`, watchlist snapshots) should print one freshness line under the title/header: `Live prices as of HH:MM` for intraday batch data, else `EOD data as of DD-MM-YY`.
+- Grouped snapshot outputs (`index`, `snap`, watchlist snapshots) should keep freshness inline with the title/header: `India (Live prices as of HH:MM)` or `Snap: ... (Live prices as of HH:MM)`, else `... (EOD data as of DD-MM-YY)`.
 - In `index` board resolution, skip quote-based day-range enrichment during candidate selection; compute missing ranges in render path via intraday fallback.
 - If grouped batch resolution returns no row at all for an index-board entry, do one direct quote fetch for that row before rendering `n/a`.
 - If range is still missing in `index` board but `regularMarketPrice` and `regularMarketPreviousClose` exist, render a proxy range using `min(prev,last)` to `max(prev,last)`.

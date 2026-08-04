@@ -35,6 +35,7 @@ from . import views
 _PERIODS = ("1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max")
 _INTERVALS = ("1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo", "1y")
 _NSE_UNIVERSE_CSV = Path(__file__).resolve().parents[2] / "data" / "nse_equity_list.csv"
+_NSE_SUPPLEMENTAL_UNIVERSE_CSV = Path(__file__).resolve().parents[2] / "data" / "nse_symbol_supplement.csv"
 _INDEX_CONSTITUENTS_CSV = Path(__file__).resolve().parents[2] / "data" / "index_constituents.csv"
 _WATCHLIST_DB_JSON = Path(__file__).resolve().parents[2] / "data" / "db.json"
 _HISTORY_FILE = Path(__file__).resolve().parents[2] / ".tickertrail_history"
@@ -1118,25 +1119,37 @@ def _load_nse_universe() -> list[dict[str, str]]:
     global _NSE_UNIVERSE_CACHE
     if _NSE_UNIVERSE_CACHE is not None:
         return _NSE_UNIVERSE_CACHE
-    if not _NSE_UNIVERSE_CSV.exists():
-        _NSE_UNIVERSE_CACHE = []
-        return _NSE_UNIVERSE_CACHE
 
-    rows: list[dict[str, str]] = []
-    try:
-        with _NSE_UNIVERSE_CSV.open(newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                symbol = str(row.get("SYMBOL", "")).strip()
-                name = str(row.get("NAME OF COMPANY", "")).strip()
-                if not symbol or not name:
-                    continue
-                rows.append({"symbol": symbol, "name": name})
-    except OSError:
-        _NSE_UNIVERSE_CACHE = []
-        return _NSE_UNIVERSE_CACHE
+    def _load_symbol_rows(csv_path: Path) -> list[dict[str, str]]:
+        """Load one local symbol CSV into normalized `symbol`/`name` rows."""
+        if not csv_path.exists():
+            return []
+        rows: list[dict[str, str]] = []
+        try:
+            with csv_path.open(newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    symbol = str(row.get("SYMBOL", "")).strip().upper()
+                    name = str(row.get("NAME OF COMPANY", row.get("NAME", ""))).strip()
+                    if not symbol or not name:
+                        continue
+                    rows.append({"symbol": symbol, "name": name})
+        except OSError:
+            return []
+        return rows
 
-    _NSE_UNIVERSE_CACHE = rows
+    merged_rows: list[dict[str, str]] = []
+    seen_symbols: set[str] = set()
+    # Keep watchlist add and `code` offline while still covering bundled ETF/fund symbols.
+    for csv_path in (_NSE_UNIVERSE_CSV, _NSE_SUPPLEMENTAL_UNIVERSE_CSV):
+        for row in _load_symbol_rows(csv_path):
+            symbol = row["symbol"]
+            if symbol in seen_symbols:
+                continue
+            merged_rows.append(row)
+            seen_symbols.add(symbol)
+
+    _NSE_UNIVERSE_CACHE = merged_rows
     return _NSE_UNIVERSE_CACHE
 
 
@@ -1535,7 +1548,7 @@ def _print_index_board() -> int:
     all_rows = tuple([*_INDIA_INDEX_BOARD, *_GLOBAL_INDEX_BOARD])
     chosen_snapshots = _resolve_board_snapshots(all_rows)
 
-    def _render_section(title: str, rows: tuple[tuple[str, str], ...]) -> None:
+    def _render_section(title: str, rows: tuple[tuple[str, str], ...], *, leading_blank: bool) -> None:
         """Render one section of the market board using resolved snapshots."""
 
         rendered_rows: list[tuple[str, str, str, str, str, float | None, float | None]] = []
@@ -1643,10 +1656,10 @@ def _print_index_board() -> int:
                 return (0, -pct_val)
             return (1, abs(pct_val))
 
-        print(f"\n{title}")
         freshness_line = _format_snapshot_freshness_line(section_snapshots, [symbol for symbol, _label in rows])
-        if freshness_line:
-            print(freshness_line)
+        if leading_blank:
+            print()
+        print(_append_header_freshness(title, freshness_line))
         print(f"{'Index':<20} {'Ticker':<20} {'Price':>12} {'Change':>18} {'Range':>18}")
         # Keep output scan-friendly: all gainers first, then losers, then unknowns.
         for label, chosen_symbol, price_txt, change_txt, range_txt, _change, _pct in sorted(rendered_rows, key=_sort_key):
@@ -1670,8 +1683,8 @@ def _print_index_board() -> int:
             )
             print(line)
 
-    _render_section("India", _INDIA_INDEX_BOARD)
-    _render_section("Global", _GLOBAL_INDEX_BOARD)
+    _render_section("India", _INDIA_INDEX_BOARD, leading_blank=False)
+    _render_section("Global", _GLOBAL_INDEX_BOARD, leading_blank=True)
     print()
     return 0
 
@@ -1806,10 +1819,8 @@ def _print_index_constituent_snap(index_symbol: str) -> int:
         count_txt = f"{len(constituents)} configured / {expected} expected"
     else:
         count_txt = f"{len(constituents)} constituents"
-    print(f"\nSnap: {label} ({count_txt})")
     freshness_line = _format_snapshot_freshness_line(snapshots, list(constituents))
-    if freshness_line:
-        print(freshness_line)
+    print(_append_header_freshness(f"Snap: {label} ({count_txt})", freshness_line))
     if configured_universe and expected is not None and len(constituents) != expected:
         print(
             f"Warning: constituent list is incomplete for {label}; "
@@ -1941,6 +1952,13 @@ def _format_snapshot_freshness_line(
     if used_intraday:
         return f"Live prices as of {local_dt.strftime('%H:%M')}"
     return f"EOD data as of {local_dt.strftime('%d-%m-%y')}"
+
+
+def _append_header_freshness(header: str, freshness_line: str | None) -> str:
+    """Append one freshness phrase inline with a header."""
+    if not freshness_line:
+        return header
+    return f"{header} ({freshness_line})"
 
 
 def _format_live_overlay_freshness_line(as_of_epoch: float | None, prefix: str) -> str | None:

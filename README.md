@@ -240,11 +240,11 @@ HCLTECH.NS               940.00     +0.20 (+0.02%)     [──────●─
 Snap fetch passes used: 1
 ```
 
-Grouped snapshot views (`index`, `snap`, and watchlist snapshots) use batched `download` minute bars during market hours, with missing symbols retried in later batch passes and no cached data in that live workflow. After market close they fall back to daily-close batch data.
+Grouped snapshot views (`index`, `snap`, and watchlist snapshots) use two sessions of batched `download` minute bars during market hours. The prior minute session supplies the previous close when Yahoo's daily history has a gap, while the latest session supplies the live price and day range. Missing symbols are retried in later batch passes with no cached data in that live workflow; after market close, grouped views fall back to daily-close batch data.
 Analytics that depend on the latest daily point, such as `move`, `trend`, `relret`, and `corr`, overlay the current batched minute-market price during market hours and fall back to cached/EOD history when the market is closed.
 For supported indices that need a Yahoo-specific fetch code, TickerTrail keeps one explicit fetch-symbol mapping per index instead of probing multiple alternates at runtime.
 If the index board's grouped batch fetch comes back empty after an idle session, TickerTrail falls back to direct per-index quote fields for those rows instead of showing a board full of `n/a`.
-Grouped snapshot commands print one freshness line under the title or section header, and daily analytics commands print a live-overlay freshness line only when the latest daily point has been updated from minute-bar data.
+Grouped snapshot commands keep freshness inline with the title or section header, and daily analytics commands print a live-overlay freshness line only when the latest daily point has been updated from minute-bar data.
 
 ### Swing Chart (`c`)
 
@@ -395,6 +395,7 @@ Top-level:
 
 Inside watchlist mode (`tt>watchlist>sharekhan>`):
 - `add <code...>`
+  - Validates against the bundled local NSE symbol universe without network calls, including the curated ETF/fund supplement shipped with the app.
 - `delete <code...>`
 - `list` / `ll`
 - `snap`

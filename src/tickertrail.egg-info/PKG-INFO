@@ -4,257 +4,458 @@ Version: 0.1.0
 Summary: Terminal stock price CLI with current quote and historical chart
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
+License-File: LICENSE
 Requires-Dist: yfinance>=0.2.54
 Requires-Dist: plotext>=5.3.2
+Dynamic: license-file
 
 # TickerTrail
 
-Terminal-first stock CLI for quotes, charts, benchmarked performance tables, index snapshots, and persistent watchlists.
+TickerTrail is a terminal app for tracking stocks and indices, comparing performance, and managing watchlists.
 
-TickerTrail is India-first (`.NS`/NSE aware) and also supports US/global symbols and benchmarks through Yahoo Finance (`yfinance`).
+It works well for India-first workflows (`.NS`/NSE aware) and also supports global symbols.
 
-## Highlights
+## Quick Start
 
-- Fast quote view with:
-  - current price, day change, day/52W range bars
-  - fundamentals (when available)
-  - 30D move dots (left -> right, latest on the right)
-  - calendar-anchored returns (`7D`, `1MO`, `3MO`, `6MO`, `9MO`, `1Y`)
-  - signal block: trend score, RSI(14), volume-vs-20D, max drawdown(1Y), win-rate, best/worst day, skew
-- Swing and intraday terminal charts (with benchmark overlay)
-- Rebased comparison tables (`t`, `tt`, `cmp`)
-- Index board + constituent snapshot (`index`, `index list`, `snap`)
-- Persistent local watchlists with mode-based workflow
-- Watchlist snapshot includes:
-  - sorted movers
-  - equal-weight 1D return
-  - NIFTY 50 1D benchmark
-  - `Alpha` (Equal-Weight minus NIFTY 50)
-- REPL shell passthrough: `!<cmd>`
-- Command-level network/cache diagnostics (`Network calls: ... | cache: hits=... misses=...`)
+Install `uv` first (if not already installed):
 
-## Requirements
-
-- Python `>=3.10`
-- [`uv`](https://docs.astral.sh/uv/) recommended
-
-## Install
+macOS / Linux:
 
 ```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv --version
+```
+
+macOS (Homebrew alternative):
+
+```bash
+brew install uv
+uv --version
+```
+
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+uv --version
+```
+
+Then clone and run:
+
+```bash
+git clone https://github.com/vsjha18/tickertrail.git
+cd tickertrail
 uv sync
+uv run tickertrail
 ```
 
-## Run
+## What You Can Do
 
-### Direct symbol
+- Check live quote snapshots
+- View swing and intraday charts in terminal
+- Compare stocks vs benchmark (`cmp`, `t`, `tt`)
+- Open index boards and constituent snapshots (`index`, `snap`)
+- Build and manage persistent watchlists
+- Run analytics boards (`move`, `trend`, `relret`/`rr`, `corr`)
 
-```bash
-uv run tickertrail RELIANCE
-uv run tickertrail TCS
-uv run tickertrail AAPL
-```
+## Daily Usage
 
-### Start REPL
+1. Start REPL:
 
 ```bash
 uv run tickertrail
 ```
 
-### Non-REPL subcommands
+2. Enter a symbol or index alias:
 
-```bash
-uv run tickertrail INFY quote
-uv run tickertrail RELIANCE chart --period 6mo --interval 1d --width 110 --height 20
+```text
+reliance
+nifty
+bank
 ```
 
-## REPL Prompt
+3. Run analytics and charts:
 
-- No active symbol: `tickertrail> `
-- Active symbol: `tickertrail><symbol_stem_lowercase>> `
-- Watchlist mode: `<watchlist_name>> `
+```text
+quote
+c 6mo
+t 1y
+move 1mo
+trend
+relret 3mo
+corr 6mo
+```
 
-Date format in output is `dd-mm-yy`.
+## Mode-Aware Behavior
 
-## REPL Commands
+Many commands are context-sensitive. You usually do not need arguments.
 
-### Core
+### 1) Stock mode (`tt>stock>infy>`)
 
-- `h` / `help [topic|command]`: organized command help (`core`, `chart`, `table`, `watchlist`, `index`) plus command-level pages with usage, defaults, and examples
-- `quote` / `q`: show quote for current symbol/index (not available in watchlist mode)
-- `quit` / `exit`: leave REPL
+- Entered by typing a stock symbol (example: `infy`).
+- `quote`, `c`, `cc`, `t`, `tt` run on the active symbol.
+- `move`, `trend`, `relret` run on the active symbol.
+- `corr` needs at least two symbols, so use `corr on <code1> <code2> ...`.
+
+### 2) Index mode (`tt>index>bank>`)
+
+- Entered by typing an index alias/symbol (example: `nifty`, `it`, `defence`, `^cnxit`).
+- If live quote fields are partial, TickerTrail still keeps you in index mode and shows the best available values.
+- `snap` shows constituents for supported indices.
+- `move`, `trend`, `relret`, `corr` can be run with no arguments:
+  - `move` runs over index constituents when available.
+  - `trend` runs over index constituents when available.
+  - `relret` runs over index constituents with an index-appropriate benchmark.
+  - `corr` runs over index constituents and needs at least two valid overlapping series.
+
+### 3) Watchlist mode (`tt>watchlist>sharekhan>`)
+
+- Entered with `watchlist open <name>`.
+- `move`, `trend`, `relret`, `corr` with no arguments run on symbols in that watchlist.
+- `snap` shows the current watchlist snapshot.
+
+### 4) Explicit override mode (`on ...`)
+
+- Works from any context.
+- `move on <codes...> [period]`
+- `trend on <codes...>`
+- `relret on <codes...> [period] [vs <benchmark> [period]]`
+- `corr on <codes...> [period]`
+
+## Defaults And No-Arg Behavior
+
+### Analytics defaults
+
+- `move` default period: `1mo`
+- `trend`: no period argument
+- `relret` / `rr` default period: `1mo`
+- `corr` default period: `1mo`
+
+### `relret` benchmark defaults
+
+- Watchlist mode: benchmark defaults to `NIFTY 50 (^NSEI)`
+- Index mode: benchmark defaults by active index context
+- Explicit `relret on ...`: default benchmark is `NIFTY 50 (^NSEI)`
+- `vs <benchmark>` overrides default benchmark selection
+
+### Chart/table defaults
+
+- `c` default period: `6mo` (default interval auto-selected from period)
+- `t` default period: `6mo` (default bin auto-selected from period: `<=7d -> 1d`, `<=1mo -> 1wk`, `>1mo and <=3y -> 1mo`, `>3y -> 1y`)
+- `cc` default interval: `5m`
+- `tt` default interval: `5m`
+- `cmp` default period: `6mo` (with auto interval)
+
+### Common no-arg commands
+
+- `move` -> `move 1mo` in index/watchlist contexts
+- `trend` -> trend board for current context (index/watchlist/symbol)
+- `relret` / `rr` -> `relret 1mo` for current context
+- `corr` -> `corr 1mo` in index/watchlist contexts
+- `c` -> swing chart for active symbol (6mo defaults)
+- `t` -> rebased table for active symbol (6mo defaults)
+- `cc` -> intraday chart for active symbol (`5m`)
+- `tt` -> intraday table for active symbol (`5m`)
+
+## Command Output Examples
+
+These snippets are captured from the real CLI renderers with fixed sample data, so the formatting matches actual command output.
+
+### Quote
+
+```text
+tt> quote
+
+INFY.NS  Infosys Ltd.  [INR]
+Px 1,941.20  Chg +19.80 (+1.03%)  O 1,928.00  L/H 1,918.10/1,952.30
+Vol 8.23M  MCap 8.04T  Updated 02-03-26 02:04:28
+Day Range  [──────────────────────────●─────────────]  1,918.10 .. 1,952.30
+52W Range  [──────────────────────────────────●─────]  1,380.20 .. 2,015.80
+30D Moves  oooooooooooooooooooooooooooooo
+Returns    7D +0.85%  1MO +4.78%  3MO +18.69%  6MO +46.30%  9MO +92.17%  1Y n/a
+Signal     TrendScore 5/5  RSI14 100.0  Vol/20D 1.02x
+Risk       MaxDD(1Y) +0.00%  WinRate(1Y) 100.00%
+Extremes   Best +0.73% (03-03-25)  Worst +0.09% (28-02-26)  Skew n/a
+PE(TTM) 30.80 | PEG 2.10 | ROE 30.20%
+```
+
+### Move Board
+
+```text
+tt> move on infy tcs reliance 1mo
+
+Moves (1MO) - Explicit symbols
+Symbol           1MO Moves    Dots
+INFY.NS          1MO Moves    oooooooooooooooooooooooooooooo
+TCS.NS           1MO Moves    oooooooooooooooooooooooooooooo
+RELIANCE.NS      1MO Moves    oooooooooooooooooooooooooooooo
+```
+
+### Trend Board
+
+```text
+tt> trend on infy tcs reliance
+
+Trend (Current) - Explicit symbols
+Symbol           Trend Score
+INFY.NS          5.0/5.0
+TCS.NS           5.0/5.0
+RELIANCE.NS      5.0/5.0
+```
+
+### Relative Return
+
+```text
+tt> rr on infy tcs reliance vs nifty 1mo
+
+Relative Return (1MO) - Explicit symbols vs NIFTY 50 (^NSEI)
+Symbol               Return      Bench     RelRet
+INFY.NS             +15.13%    +12.06%     +3.07%
+RELIANCE.NS         +13.24%    +12.06%     +1.18%
+TCS.NS              +10.86%    +12.06%     -1.20%
+```
+
+### Correlation Summary
+
+```text
+tt> corr on infy tcs reliance 1mo
+
+Correlation Summary (1MO) - Explicit symbols
+Universe: 3 symbols | overlap points: 29
+
+Most Positive Pairs
+TCS.NS <-> RELIANCE.NS               +1.00
+INFY.NS <-> RELIANCE.NS              +1.00
+INFY.NS <-> TCS.NS                   +1.00
+
+Most Negative Pairs
+n/a
+
+Near-Zero Pairs (Diversifiers)
+n/a
+```
+
+### Snapshot
+
+```text
+tt> snap
+
+Snap: NIFTY IT (10 constituents)
+Symbol                    Price             Change              Range
+TCS.NS                 1,010.00     +0.80 (+0.08%)     [─────●──────]
+LTIM.NS                1,070.00     +0.80 (+0.07%)     [──────●─────]
+PERSISTENT.NS            920.00     +0.50 (+0.05%)     [──────●─────]
+INFY.NS                1,070.00     +0.50 (+0.05%)     [──────●─────]
+HCLTECH.NS               940.00     +0.20 (+0.02%)     [──────●─────]
+...
+Snap fetch passes used: 1
+```
+
+Grouped snapshot views (`index`, `snap`, and watchlist snapshots) use batched `download` minute bars during market hours, with missing symbols retried in later batch passes and no cached data in that live workflow. After market close they fall back to daily-close batch data.
+Analytics that depend on the latest daily point, such as `move`, `trend`, `relret`, and `corr`, overlay the current batched minute-market price during market hours and fall back to cached/EOD history when the market is closed.
+For supported indices that need a Yahoo-specific fetch code, TickerTrail keeps one explicit fetch-symbol mapping per index instead of probing multiple alternates at runtime.
+If the index board's grouped batch fetch comes back empty after an idle session, TickerTrail falls back to direct per-index quote fields for those rows instead of showing a board full of `n/a`.
+Grouped snapshot commands keep freshness inline with the title or section header, and daily analytics commands print a live-overlay freshness line only when the latest daily point has been updated from minute-bar data.
+
+### Swing Chart (`c`)
+
+```text
+tt> c 6mo
+
+^CNXIT close (6mo, 1d)  +68.71 (+47.72%)
+     ┌─────────────────────────────────────────────────────────────────────────┐
+246.3┼───────────────────────────────────────────────────────────────────────••┤
+     │                                                                •••••••  │
+231.7┼────────────────────────────────────────────────────────────•••••────────┤
+     │                                                       ••••••            │
+217.0┼──────────────────────────────────────────────────•••••──────────────────┤
+     │                                            ••••••               ▗▄▄▄▄▞▀•│
+202.4┼───────────────────────────────────────•••••───────────────▄▄▄▞▀▀▘───────┤
+     └┬───────┬───────┬───────────────┬───────┬───────┬───────────────┬────────┘
+   03-09-25 23-09-25 13-10-25     21-11-25  11-12-25 31-12-25     09-02-26
+Day Range  [────────────────────────────●─────────────────────]  144.00 .. 212.71
+52W Range  [───────────────●──────────────────────────────]  120.00 .. 260.00
+Last: 212.71
+Move: +68.71 (+47.72%) | From: 03-09-25 -> 01-03-26
+```
+
+### Intraday Chart (`cc`)
+
+```text
+tt> cc 5m
+
+^CNXIT close (1d, 5m)  +7.21 (+0.50%)
+      ┌────────────────────────────────────────────────────────────────────────┐
+1448.3┼────────────────────────────•••─────────────────────────────────────────┤
+      │                           ••▀•                                         │
+1446.6┼──────•───────────────────▗•────────────────────────────────────────────┤
+      │    ••▄••                ••                                             │
+1444.8┼───••───▚•───────────────•──────────────────────────────────────────────┤
+      │  •▘     ••             •▘                                              │
+1435.9┼────────────────••••────────────────────────────────────────────────────┤
+      └┬───────────────────────────────────┬──────────────────────────────────┬┘
+     05:55                               10:45                            15:30
+Day Range  [────────────────────────────●─────────────────────]  1,435.90 .. 1,448.30
+52W Range  [───────────────●──────────────────────────────]  120.00 .. 260.00
+Move: +7.21 (+0.50%) | From: 05:55 -> 10:00
+```
+
+### Swing Table (`t`)
+
+```text
+tt> t 1y
+
+Rebased Co-Plot (base=100): ^CNXIT vs NIFTY 50 [period=1y, bin=1mo]
+Date Range: 05-04-25 -> 01-03-26
+Date           Stock     Bench     Delta    Alpha%
+05-04-25      100.00    100.00     +0.00    +0.00%
+05-05-25      100.44    100.59     -0.15    -0.15%
+04-06-25      100.87    101.17     -0.30    -0.30%
+...
+Final Relative (Stock - Bench): -1.43
+Final Alpha% (Stock vs Bench): -1.37%
+```
+
+### Intraday Table (`tt`)
+
+```text
+tt> tt 15m
+
+Rebased Co-Plot (base=100): ^CNXIT vs NIFTY 50 [period=1d, bin=15m]
+Date Range: 21:45 -> 10:00
+Date           Stock     Bench     Delta    Alpha%
+21:45         100.00    100.00     +0.00    +0.00%
+00:15         100.38    100.43     -0.05    -0.05%
+02:45         100.00    100.00     -0.00    -0.00%
+...
+Final Relative (Stock - Bench): -0.07
+Final Alpha% (Stock vs Bench): -0.07%
+```
+
+Tables are unsampled: row spacing always matches the header bin (for example `bin=5m` means 5-minute rows, `bin=1wk` means weekly rows).
+
+### Multi-Symbol Compare (`cmp`)
+
+```text
+tt> cmp tcs infy reliance 1y w
+
+Compare (base=100): TCS.NS, INFY.NS, RELIANCE.NS [1y, 1wk]
+Date Range: 09-03-25 -> 01-03-26
+Date            TCS.NS     INFY.NS RELIANCE.NS
+09-03-25        100.00      100.00      100.00
+18-05-25        103.72      105.19      104.53
+27-07-25        106.45      109.45      108.04
+...
+Final           118.48      126.02      122.63
+```
+
+## REPL Basics
+
+- `h` / `help [topic|command]`: help system
+- `quote` / `q`: show active symbol/index quote
+- `cache`: show today's history cache summary
+- `cache clear`: clear today's history cache
+- `reload` / `r`: refresh quote and replay last chart/table
 - `cls` / `clear`: clear terminal
-- `reload`: refresh REPL shell state
-- `r`: refresh current quote and replay last chart/table
-- `cd ..`: return to previously active index/watchlist mode without re-resolving symbols
-- `cache clear`: clear today's persisted history-cache bucket
-- `move [7d|1mo|3mo|6mo|9mo|1y]`: directional move-dots board (alias: `moves`, default `1mo`)
-- `trend`: current trend-score board (alias: `trends`, no args)
-- `relret [7d|1mo|3mo|6mo|9mo|1y]`: relative-return ranking (default `1mo`)
-- `corr [1mo|3mo|6mo|9mo|1y]`: correlation summary of daily returns (default `1mo`)
-- `news <code>`: recent Yahoo Finance headlines for one symbol (best-effort; availability varies by ticker/region)
-  - Shows publish time in local timezone plus relative age when timestamp metadata is available.
-  - Timestamp extraction checks both top-level and nested Yahoo news payload fields.
-  - Renders newest timestamped headlines first in compact bullets: `(age) headline` + link, separated by one blank line.
-  - Applies subtle ANSI coloring for headlines/links when terminal color is supported.
-  - Supports index aliases directly (for example: `news nifty`, `news it`, `news metals`, `news consumer`, `news dow`).
-- `!<shell-cmd>`: run shell command in underlying shell
+- Press `Ctrl+C` during an in-progress command to cancel that command and return to the prompt
+- Press `Ctrl+C` on an empty prompt to exit the REPL
+- `quit` / `exit`: leave REPL
+- `!<shell-cmd>`: run shell command
 
-### Symbol / Discovery
+## Symbol and Index Commands
 
 - `<symbol>`: switch active symbol and print quote
-- `code <query>`: fuzzy ticker lookup from local NSE universe data
-- `news <code>`: fetch latest symbol headlines from Yahoo Finance
+- `code <query>`: fuzzy ticker lookup from local universe
+- `news <code>`: recent headlines for a symbol/index alias
+- `index`: index board
+- `index list`: supported index catalog
+- `snap`: snapshot for active index/watchlist context
 
-### Index Tools
+## Charts and Tables
 
-- `index`: live board for curated India + global indices
-- `index list`: curated index symbol catalog
-- Includes `NIFTY MIDCAP SELECT` in the India index set (aliases: `midcap select`, `select`)
-- `snap`: index-constituent snapshot for active supported index (falls back to index-only snapshot if constituents are unavailable)
-- `move [7d|1mo|3mo|6mo|9mo|1y]`: move-dots board for active index (alias: `moves`; constituents when available; otherwise index symbol) (default `1mo`)
-- `trend`: current trend-score board for active index (constituents when available; otherwise index symbol)
-- `relret [7d|1mo|3mo|6mo|9mo|1y]`: relative-return ranking for active index scope
-- `corr [1mo|3mo|6mo|9mo|1y]`: return-correlation summary for active index scope
-- Index alias switching now restores quote output via snapshot fallback when Yahoo index `Ticker` payload is sparse (for example `it`, `nifty`, `metal`, `metals`).
-- `index` highlights the first three `NIFTY 50` row columns (`Index`, `Ticker`, `Price`) for quick visual scanning in sorted output.
-- `relret` canonicalizes index fallback symbols (for example `NIFTY_NEXT_50.NS` -> `^NIFTYNXT50`) before benchmark history fetch.
-- `relret` benchmark policy: watchlist mode always uses `^NSEI` (NIFTY 50); index mode uses the active index itself as benchmark.
-- In watchlist mode, `relret` keeps stock rows sorted by outperformance and appends `WATCHLIST(EW)` at the end (not part of sorting), separated by one blank line.
+- Swing chart: `c [<benchmark>] [<period>]`
+- Swing chart (dash override): `c [<benchmark>] - <period|agg> [agg]`
+- Intraday chart: `cc [<benchmark>] [<1m|5m|15m|30m|1hr>]`
+- Swing table: `t [<benchmark>] [<period>]`
+- Swing table (dash override): `t [<benchmark>] - <period|agg> [agg]`
+- Intraday table: `tt [<benchmark>] [<1m|5m|15m|30m|1hr>]`
+- Multi-symbol compare: `cmp <symbol1> <symbol2> [symbolN ...] [period [agg]]`
 
-### Chart + Table
+Period and aggregation tokens:
+- Period units: `d`, `w`, `mo`, `y`, `max`
+- Aggregation units: `m`, `d`, `w`, `mo`, `y`
+- `m` means minute, `mo` means month
 
-Canonical forms:
+Override examples (`t/c/cc/tt`):
+- Active symbol stays the same; first positional token is benchmark override.
+- Change only bin size: `t - w`, `c - mo`, `cc - 15m`, `tt - 30m`
+- Change benchmark + bin size: `t bank - w`, `c nifty - mo`, `cc bank - 15m`, `tt bank - 30m`
+- Change period + bin size (swing only): `t - 1y mo`, `c - 2y w`
+- Yearly binning example: `t - 5y y`
 
-- `chart swing [<code>] [<period>]`
-- `chart swing [<code>] - <period> [agg]`
-- `chart intra [<code>] [<1m|5m|15m>]`
-- `table swing [<code>] [<period>]`
-- `table swing [<code>] - <period> [agg]`
-- `table intra [<code>] [<1m|5m|15m>]`
-- `table intra [<code>] - <period> [agg]`
+## Watchlists
 
-Alias forms (fully supported):
-
-- `c` / `cc` map to `chart swing` / `chart intra`
-- `t` / `tt` map to `table swing` / `table intra`
-- Existing alias grammar remains valid:
-  - `c <period>`, `c <code>`, `c <code> <period>`, `c - <period> [agg]`, `c <code> - <period> [agg]`
-  - `cc <1m|5m|15m>`, `cc <code>`, `cc <code> <1m|5m|15m>`
-  - `t <code>`, `t <code> <period>`, `t - <period> [agg]`, `t <code> - <period> [agg]`
-  - `tt <1m|5m|15m>`, `tt <code>`, `tt <code> <1m|5m|15m>`, `tt - <period> [agg]`, `tt <code> - <period> [agg]`
-
-- `cmp <symbol1> <symbol2> [symbolN ...] [period [agg]]`
-
-### Watchlists
-
-Canonical command family is `watchlist ...`; alias `wl ...` is fully supported.
-
+Top-level:
 - `watchlist create <name>`
 - `watchlist list`
+- `watchlist open <name>`
 - `watchlist delete <name>`
 - `watchlist merge <wl1> <wl2> <target>`
-  - if `<target>` exists: merge into existing target
-  - if `<target>` does not exist: create and merge
-  - deduplicates while preserving stable order
-- `watchlist open <name>`
-- `watchlist <name>` (shorthand for `watchlist open <name>`)
 - `watchlist` (exit watchlist mode)
-- bare `wl` means `wl list`
+- If the watchlist database cannot be read temporarily, the app reports a database read error instead of incorrectly saying the watchlist does not exist.
 
-In watchlist mode (`<name>>` prompt):
+Inside watchlist mode (`tt>watchlist>sharekhan>`):
+- `add <code...>`
+  - Validates against the bundled local NSE symbol universe without network calls, including the curated ETF/fund supplement shipped with the app.
+- `delete <code...>`
+- `list` / `ll`
+- `snap`
+- `move [period]`
+- `move on <code1> <code2> ... [period]`
+  - `move` period accepts `Nd`, `Nmo` (`N < 12`), or `Ny` (for example `5d`, `2mo`, `3y`).
+- `trend`
+- `trend on <code1> <code2> ...`
+- `relret [period]`
+- `rr [period]`
+- `relret [period] [vs <benchmark> [period]]`
+- `relret on <code1> <code2> ... [period] [vs <benchmark> [period]]`
+  - `relret` period accepts `Nd`, `Nmo` (`N < 12`), or `Ny` (for example `5d`, `2mo`, `3y`).
+- `corr [period]`
+- `corr on <code1> <code2> ... [period]`
+  - `corr` period accepts `Nd`, `Nmo` (`N < 12`), or `Ny` (for example `5d`, `2mo`, `3y`).
 
-- `add <code...>`: add symbols (validated via local NSE CSV; no Yahoo call for validation)
-- `delete <code...>`: remove symbols
-- `list` / `ll`: show current symbols
-- `snap`: watchlist snapshot board
-- `move [7d|1mo|3mo|6mo|9mo|1y]`: move-dots board for all symbols (alias: `moves`; sorted by max green days to least)
-- `trend`: current trend-score board for all symbols (sorted highest to lowest trend score)
-- `relret [7d|1mo|3mo|6mo|9mo|1y]`: relative-return ranking for all symbols, plus a final `WATCHLIST(EW)` equal-weight summary row (after one blank separator line)
-- `corr [1mo|3mo|6mo|9mo|1y]`: return-correlation summary for all symbols
+## Example Session
 
-## Token Rules
-
-- Period units: `d`, `w`, `mo`, `y`, `max`
-- Aggregation units: `m`, `d`, `w`, `mo`
-- `m` means minute; `mo` means month
-
-## Common Examples
-
-```bash
-# REPL
-uv run tickertrail
-
-# Inside REPL
-help move
-help watchlist open
+```text
+help
 code national thermal
-news infy
 watchlist create swing
-watchlist create momentum
-watchlist merge swing momentum core
-watchlist open core
+watchlist open swing
 add tcs infy reliance
-list
 snap
-moves 1mo
+move 1mo
 trend
 relret
 corr
 c 1y
 t nifty 6mo w
-cmp nifty goldbees hdfcbank csco 3y w
-!pwd
 ```
 
-## Data + Storage
+## Data Files (User-Relevant)
 
-- Market data source: Yahoo Finance via `yfinance`
-- Local symbol universe: `data/nse_equity_list.csv`
-- Index constituents: `data/index_constituents.csv`
-- Watchlist DB: `data/db.json`
-- History cache (daily JSON buckets): `.cache/history/`
-
-`data/db.json` structure:
-
-```json
-{
-  "watchlists": {
-    "swing": ["TCS.NS", "INFY.NS"],
-    "core": ["RELIANCE.NS", "HDFCBANK.NS"]
-  }
-}
-```
-
-## Project Layout
-
-- `src/tickertrail/cli.py`: CLI entrypoint and REPL controller
-- `src/tickertrail/timeframe.py`: period/interval normalization
-- `src/tickertrail/market_hours.py`: trading-session helpers
-- `src/tickertrail/price_history.py`: close-series retrieval
-- `src/tickertrail/quote_tools.py`: quote-derived analytics helpers
-- `src/tickertrail/snapshot_service.py`: grouped snapshot orchestration
-- `src/tickertrail/views.py`: rendering helpers
-- `tests/`: unit test suite (network mocked/stubbed)
-
-## Testing
-
-Run full tests with coverage:
-
-```bash
-make test
-```
-
-Equivalent direct commands:
-
-```bash
-PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run --no-sync python -m coverage run -m unittest discover -s tests
-PYTHONPATH=src UV_CACHE_DIR=.uv-cache uv run --no-sync python -m coverage report -m --fail-under=95 --include="src/tickertrail/cli.py"
-```
-
-Current policy target is at least `95%` coverage for `src/tickertrail/cli.py`.
+- Watchlists are stored locally in `data/db.json`
+- Local symbol universe file: `data/nse_equity_list.csv`
+- Index constituent mapping: `data/index_constituents.csv`
+- Local history cache: `.cache/history/`
 
 ## Notes
 
-- `Ticker.info` and `download/history` can occasionally return partial/missing fields; CLI falls back where possible.
-- Intraday availability and index symbol behavior depend on Yahoo data constraints.
-- Network latency is usually the largest source of runtime delay.
+- Some symbols/intervals can return partial market data.
+- Intraday availability can vary by symbol and market session.
+- `cc 1m` and `cc 5m` can differ slightly because of timing and data availability.
+- Quote `Day Range` and `52W Range` are rendered as terminal-friendly bars.
+- You can also start directly with a symbol, for example:
+
+```bash
+uv run tickertrail RELIANCE
+```
