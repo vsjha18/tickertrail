@@ -47,6 +47,16 @@ uv run tickertrail
 - Build and manage persistent watchlists
 - Run analytics boards (`move`, `trend`, `relret`/`rr`, `corr`)
 
+## Code Structure
+
+- `cli.py`: entry point, compatibility adapters, and REPL controller orchestration
+- `command_parser.py`: typed, network-free command grammar shared by CLI entry points
+- `repl_help.py`: data-driven REPL overview, topic, command, and alias help
+- `index_config.py`: canonical index aliases, board membership, fetch mappings, and prompt labels
+- `price_history.py` / `snapshot_service.py`: reusable market-data services with injected network callbacks
+- `views.py` / `quote_tools.py`: presentation and quote analytics
+- `timeframe.py` / `market_hours.py`: shared period and market-session policy
+
 ## Daily Usage
 
 1. Start REPL:

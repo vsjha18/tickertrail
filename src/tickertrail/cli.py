@@ -25,9 +25,12 @@ import pandas as pd
 import plotext as plt
 import yfinance as yf
 
+from . import command_parser
+from . import index_config
 from . import market_hours
 from . import price_history
 from . import quote_tools
+from . import repl_help
 from . import snapshot_service
 from . import timeframe
 from . import views
@@ -41,194 +44,21 @@ _WATCHLIST_DB_JSON = Path(__file__).resolve().parents[2] / "data" / "db.json"
 _HISTORY_FILE = Path(__file__).resolve().parents[2] / ".tickertrail_history"
 _WATCHLIST_IO_RETRY_DELAY_SECONDS = 0.05
 _WATCHLIST_LAST_ERROR: str | None = None
-_INDEX_FETCH_SYMBOLS: dict[str, str] = {
-    # Use one explicit Yahoo fetch symbol per index where the canonical code is unreliable.
-    "^CNXMIDCAP": "NIFTY_MIDCAP_100.NS",
-    "^NIFTYNXT50": "NIFTY_NEXT_50.NS",
-    "^NSESMCP100": "NIFTY_SMLCAP_100.NS",
-    "^CNXDEFENCE": "NIFTY_IND_DEFENCE.NS",
-}
-_INDEX_NORMALIZATION_ALIASES: dict[str, str] = {
-    # Compatibility aliases retained for normalization only.
-    "^NSEMDCP100": "^CNXMIDCAP",
-    "NIFTYMIDCAP100.NS": "^CNXMIDCAP",
-    "NIFTY_MIDCAP_100.NS": "^CNXMIDCAP",
-    "^NSESMCP250": "^NSESMCP100",
-    "NIFTY_SMALLCAP_100.NS": "^NSESMCP100",
-    "NIFTY_SMLCAP_100.NS": "^NSESMCP100",
-    "NIFTY_NEXT_50.NS": "^NIFTYNXT50",
-    "NIFTY_IND_DEFENCE.NS": "^CNXDEFENCE",
-}
-_INDIA_INDEX_BOARD = (
-    ("^NSEI", "NIFTY 50"),
-    ("^NSEBANK", "NIFTY BANK"),
-    ("^CNXIT", "NIFTY IT"),
-    ("^CNXMIDCAP", "NIFTY MIDCAP 100"),
-    ("^NSEMDCP50", "NIFTY MIDCAP SELECT"),
-    ("^NIFTYNXT50", "NIFTY NEXT 50"),
-    ("^CNXINFRA", "NIFTY INFRA"),
-    ("^CNXPSE", "NIFTY PSE"),
-    ("^CNXAUTO", "NIFTY AUTO"),
-    ("^CNXENERGY", "NIFTY ENERGY"),
-    ("^CNXDEFENCE", "NIFTY DEFENCE"),
-    ("^CNXFMCG", "NIFTY FMCG"),
-    ("^CNXMEDIA", "NIFTY MEDIA"),
-    ("^CNXMETAL", "NIFTY METAL"),
-    ("^CNXMNC", "NIFTY MNC"),
-    ("^CNXPHARMA", "NIFTY PHARMA"),
-    ("^CNXPSUBANK", "NIFTY PSU BANK"),
-    ("^CNXREALTY", "NIFTY REALTY"),
-    ("NIFTY_FIN_SERVICE.NS", "NIFTY FIN SERVICE"),
-    ("^CNXCONSUM", "NIFTY CONSUMPTION"),
-    ("^INDIAVIX", "INDIA VIX"),
-    ("^NSESMCP100", "NIFTY SMALLCAP 100"),
-)
-_GLOBAL_INDEX_BOARD = (
-    ("^FTSE", "FTSE 100"),
-    ("^FCHI", "CAC 40"),
-    ("^HSI", "HANG SENG"),
-    ("^N225", "NIKKEI 225"),
-    ("^IXIC", "NASDAQ"),
-    ("^DJI", "DOW JONES"),
-)
-_INDEX_ALIASES = {
-    # India indices
-    "NIFTY": "^NSEI",
-    "NIFTY50": "^NSEI",
-    "NIFTY 50": "^NSEI",
-    "NIFTYBANK": "^NSEBANK",
-    "NIFTY BANK": "^NSEBANK",
-    "BANKNIFTY": "^NSEBANK",
-    "NSEBANK": "^NSEBANK",
-    "BANK": "^NSEBANK",
-    "MIDCAP": "^CNXMIDCAP",
-    "MIDCAP100": "^CNXMIDCAP",
-    "NIFTYMIDCAP100": "^CNXMIDCAP",
-    "NIFTY MIDCAP 100": "^CNXMIDCAP",
-    "MIDCAPSELECT": "^NSEMDCP50",
-    "MIDCAP SELECT": "^NSEMDCP50",
-    "NIFTYMIDCAPSELECT": "^NSEMDCP50",
-    "NIFTY MIDCAP SELECT": "^NSEMDCP50",
-    "MID SELECT": "^NSEMDCP50",
-    "SELECT": "^NSEMDCP50",
-    "SMALLCAP": "^NSESMCP100",
-    "SMALLCAP100": "^NSESMCP100",
-    "NIFTYSMALLCAP100": "^NSESMCP100",
-    "NIFTY SMALLCAP 100": "^NSESMCP100",
-    "VIX": "^INDIAVIX",
-    "INDIAVIX": "^INDIAVIX",
-    "INDIA VIX": "^INDIAVIX",
-    "NIFTY IT": "^CNXIT",
-    "NIFTYIT": "^CNXIT",
-    "IT": "^CNXIT",
-    "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
-    "NIFTYFIN": "NIFTY_FIN_SERVICE.NS",
-    "NIFTY FIN SERVICE": "NIFTY_FIN_SERVICE.NS",
-    "NIFTYFINSERVICE": "NIFTY_FIN_SERVICE.NS",
-    "NIFTY FINANCE": "NIFTY_FIN_SERVICE.NS",
-    "NIFTYFINANCE": "NIFTY_FIN_SERVICE.NS",
-    "FIN": "NIFTY_FIN_SERVICE.NS",
-    "FINANCE": "NIFTY_FIN_SERVICE.NS",
-    "NIFTYFMCG": "^CNXFMCG",
-    "NIFTY FMCG": "^CNXFMCG",
-    "FMCG": "^CNXFMCG",
-    "NIFTYPSE": "^CNXPSE",
-    "NIFTY PSE": "^CNXPSE",
-    "PSE": "^CNXPSE",
-    "CPSE": "^CNXPSE",
-    "NIFTYAUTO": "^CNXAUTO",
-    "NIFTY AUTO": "^CNXAUTO",
-    "AUTO": "^CNXAUTO",
-    "NIFTYINFRA": "^CNXINFRA",
-    "NIFTY INFRA": "^CNXINFRA",
-    "INFRA": "^CNXINFRA",
-    "NIFTYENERGY": "^CNXENERGY",
-    "NIFTY ENERGY": "^CNXENERGY",
-    "ENERGY": "^CNXENERGY",
-    "NIFTYMEDIA": "^CNXMEDIA",
-    "NIFTY MEDIA": "^CNXMEDIA",
-    "MEDIA": "^CNXMEDIA",
-    "NIFTYMETAL": "^CNXMETAL",
-    "NIFTY METAL": "^CNXMETAL",
-    "METAL": "^CNXMETAL",
-    "METALS": "^CNXMETAL",
-    "NIFTYMNC": "^CNXMNC",
-    "NIFTY MNC": "^CNXMNC",
-    "MNC": "^CNXMNC",
-    "NIFTYREALTY": "^CNXREALTY",
-    "NIFTY REALTY": "^CNXREALTY",
-    "REALTY": "^CNXREALTY",
-    "NIFTYPHARMA": "^CNXPHARMA",
-    "NIFTY PHARMA": "^CNXPHARMA",
-    "PHARMA": "^CNXPHARMA",
-    "NIFTYCONSUMPTION": "^CNXCONSUM",
-    "NIFTY CONSUMPTION": "^CNXCONSUM",
-    "NIFTYCONSUMER": "^CNXCONSUM",
-    "NIFTY CONSUMER": "^CNXCONSUM",
-    "CONSUMPTION": "^CNXCONSUM",
-    "CONSUMER": "^CNXCONSUM",
-    "CONSUMERS": "^CNXCONSUM",
-    "NEXT50": "^NIFTYNXT50",
-    "NIFTYNEXT50": "^NIFTYNXT50",
-    "NIFTY NEXT 50": "^NIFTYNXT50",
-    "NIFTYDEFENCE": "^CNXDEFENCE",
-    "NIFTY DEFENCE": "^CNXDEFENCE",
-    "NIFTYDEFENSE": "^CNXDEFENCE",
-    "NIFTY DEFENSE": "^CNXDEFENCE",
-    "DEFENCE": "^CNXDEFENCE",
-    "DEFENSE": "^CNXDEFENCE",
-    "PSUBANK": "^CNXPSUBANK",
-    "NIFTYPSUBANK": "^CNXPSUBANK",
-    "NIFTY PSU BANK": "^CNXPSUBANK",
-    "PSU": "^CNXPSUBANK",
-    "SENSEX": "^BSESN",
-    "BSE SENSEX": "^BSESN",
-    # Global indices
-    "NASDAQ": "^IXIC",
-    "NASADQ": "^IXIC",
-    "DOW": "^DJI",
-    "DOWJONES": "^DJI",
-    "HANGSENG": "^HSI",
-    "HANG SENG": "^HSI",
-    "NIKKEI": "^N225",
-    "NIKKEI225": "^N225",
-    "FTSE": "^FTSE",
-    "FTSE100": "^FTSE",
-    "FTSE 100": "^FTSE",
-    "SP": "^GSPC",
-    "S&P": "^GSPC",
-    "S&P500": "^GSPC",
-    "SP500": "^GSPC",
-}
+_INDEX_FETCH_SYMBOLS = index_config.FETCH_SYMBOLS
+_INDEX_NORMALIZATION_ALIASES = index_config.NORMALIZATION_ALIASES
+_INDIA_INDEX_BOARD = index_config.INDIA_BOARD
+_GLOBAL_INDEX_BOARD = index_config.GLOBAL_BOARD
+_INDEX_ALIASES = index_config.ALIASES
+
 _NSE_UNIVERSE_CACHE: list[dict[str, str]] | None = None
 _SNAP_UNIVERSE_CACHE: dict[str, tuple[str, tuple[str, ...]]] | None = None
 _INTRADAY_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
-_REPL_INTRADAY_INTERVAL_ALIASES: dict[str, str] = {
-    "1m": "1m",
-    "5m": "5m",
-    "15m": "15m",
-    "30m": "30m",
-    "1h": "1h",
-    "1hr": "1h",
-}
+_REPL_INTRADAY_INTERVAL_ALIASES = command_parser.INTRADAY_INTERVAL_ALIASES
 _NETWORK_CALL_COUNTS: dict[str, int] = {}
 _PROGRESS_STATE: dict[str, Any] = {"active": False, "emitted": False}
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
-_INDEX_EXPECTED_CONSTITUENT_COUNTS: dict[str, int] = {
-    "^NSEI": 50,
-    "^NIFTYNXT50": 50,
-    "^CNXMIDCAP": 100,
-    "^NSEMDCP50": 25,
-    "^NSESMCP100": 100,
-    "^FTSE": 100,
-    "^FCHI": 40,
-    "^N225": 225,
-    "^DJI": 30,
-}
-_SNAP_ALLOWED_INDEX_SYMBOLS: set[str] = {
-    *(symbol for symbol, _label in _INDIA_INDEX_BOARD if symbol != "^INDIAVIX"),
-    "^DJI",
-}
+_INDEX_EXPECTED_CONSTITUENT_COUNTS = index_config.EXPECTED_CONSTITUENT_COUNTS
+_SNAP_ALLOWED_INDEX_SYMBOLS = index_config.SNAP_ALLOWED_SYMBOLS
 _MOVES_DAYS_BY_PERIOD: dict[str, int] = {
     "7d": 7,
     "1mo": 30,
@@ -237,38 +67,9 @@ _MOVES_DAYS_BY_PERIOD: dict[str, int] = {
     "9mo": 270,
     "1y": 365,
 }
-_ANALYTICS_PERIOD_HINT = "Nd|Nmo(<12)|Ny"
-_INDEX_BOARD_SYMBOLS: set[str] = {*(symbol.upper() for symbol, _ in _INDIA_INDEX_BOARD), *(symbol.upper() for symbol, _ in _GLOBAL_INDEX_BOARD)}
-_INDEX_PROMPT_LABELS: dict[str, str] = {
-    "^NSEI": "nifty",
-    "^NSEBANK": "bank",
-    "^CNXIT": "it",
-    "^CNXMIDCAP": "midcap",
-    "^NSEMDCP50": "midcapselect",
-    "^NIFTYNXT50": "next50",
-    "^CNXINFRA": "infra",
-    "^CNXPSE": "pse",
-    "^CNXAUTO": "auto",
-    "^CNXENERGY": "energy",
-    "^CNXDEFENCE": "defence",
-    "^CNXFMCG": "fmcg",
-    "^CNXMEDIA": "media",
-    "^CNXMETAL": "metal",
-    "^CNXMNC": "mnc",
-    "^CNXPHARMA": "pharma",
-    "^CNXPSUBANK": "psubank",
-    "^CNXREALTY": "realty",
-    "NIFTY_FIN_SERVICE.NS": "fin",
-    "^CNXCONSUM": "consumer",
-    "^INDIAVIX": "vix",
-    "^NSESMCP100": "smallcap",
-    "^FTSE": "ftse",
-    "^FCHI": "cac",
-    "^HSI": "hangseng",
-    "^N225": "nikkei",
-    "^IXIC": "nasdaq",
-    "^DJI": "dow",
-}
+_ANALYTICS_PERIOD_HINT = command_parser.ANALYTICS_PERIOD_HINT
+_INDEX_BOARD_SYMBOLS = index_config.BOARD_SYMBOLS
+_INDEX_PROMPT_LABELS = index_config.PROMPT_LABELS
 
 
 def _read_conf_duration_seconds(payload: dict[str, Any], key: str) -> float:
@@ -298,30 +99,9 @@ def _read_conf_duration_seconds(payload: dict[str, Any], key: str) -> float:
         return 0.0
 
 
-@dataclass(frozen=True)
-class _ParsedSwingCommand:
-    """Parsed form of a swing command (`t` or `c`)."""
-
-    period_token: str = "6mo"
-    interval_override: str | None = None
-    benchmark_input: str | None = None
-
-
-@dataclass(frozen=True)
-class _ParsedIntradayCommand:
-    """Parsed form of an intraday command (`cc`)."""
-
-    interval: str = "5m"
-    benchmark_input: str | None = None
-
-
-@dataclass(frozen=True)
-class _ParsedCompareCommand:
-    """Parsed form of a multi-instrument compare command (`cmp`)."""
-
-    symbols: tuple[str, ...]
-    period_token: str = "6mo"
-    interval_override: str | None = None
+_ParsedSwingCommand = command_parser.SwingCommand
+_ParsedIntradayCommand = command_parser.IntradayCommand
+_ParsedCompareCommand = command_parser.CompareCommand
 
 
 @dataclass(frozen=True)
@@ -2062,182 +1842,26 @@ def _validate_period_interval(period_token: str, interval: str) -> str | None:
 
 
 def _parse_swing_command_args(args: list[str], command_name: str) -> tuple[_ParsedSwingCommand | None, str | None]:
-    """Parse `t`/`c` command arguments into a dataclass-driven command spec."""
-    usage = (
-        f"Usage: {command_name} | {command_name} <benchmark> [period [agg]] | "
-        f"{command_name} - <period|agg> [agg] | {command_name} <benchmark> - <period|agg> [agg]"
-    )
-    if len(args) == 0:
-        return _ParsedSwingCommand(), None
-
-    # Dash form preserves benchmark context and allows overriding either:
-    # 1) period only, 2) aggregation only, or 3) both period + aggregation.
-    if args[0] == "-":
-        if len(args) not in {2, 3}:
-            return None, f"Usage: {command_name} - <period|agg> [agg]"
-        period_token = _normalize_period_token(args[1])
-        interval_override = _normalize_agg_token(args[1])
-        if len(args) == 2:
-            if period_token is not None:
-                return _ParsedSwingCommand(period_token=period_token), None
-            if interval_override is not None:
-                return _ParsedSwingCommand(interval_override=interval_override), None
-            return None, f"Unsupported period/aggregation token '{args[1]}'."
-
-        if period_token is None:
-            return None, f"Unsupported period token '{args[1]}'."
-        tail_interval = _normalize_agg_token(args[2])
-        if tail_interval is None:
-            return None, f"Unsupported aggregation token '{args[2]}'."
-        return _ParsedSwingCommand(period_token=period_token, interval_override=tail_interval), None
-
-    if len(args) >= 2 and args[1] == "-":
-        if len(args) not in {3, 4}:
-            return None, f"Usage: {command_name} <benchmark> - <period|agg> [agg]"
-        period_token = _normalize_period_token(args[2])
-        interval_override = _normalize_agg_token(args[2])
-        if len(args) == 3:
-            if period_token is not None:
-                return _ParsedSwingCommand(period_token=period_token, benchmark_input=args[0]), None
-            if interval_override is not None:
-                return _ParsedSwingCommand(interval_override=interval_override, benchmark_input=args[0]), None
-            return None, f"Unsupported period/aggregation token '{args[2]}'."
-
-        if period_token is None:
-            return None, f"Unsupported period token '{args[2]}'."
-        interval_override = _normalize_agg_token(args[3])
-        if interval_override is None:
-            return None, f"Unsupported aggregation token '{args[3]}'."
-        return _ParsedSwingCommand(
-            period_token=period_token,
-            interval_override=interval_override,
-            benchmark_input=args[0],
-        ), None
-
-    if len(args) == 1:
-        # Single token is ambiguous: treat as period if valid, else benchmark input.
-        period_token = _normalize_period_token(args[0])
-        if period_token is not None:
-            return _ParsedSwingCommand(period_token=period_token), None
-        return _ParsedSwingCommand(benchmark_input=args[0]), None
-
-    if len(args) == 2:
-        # Prefer `<period> <agg>` when both tokens match that shape.
-        period_token = _normalize_period_token(args[0])
-        interval_override = _normalize_agg_token(args[1])
-        if period_token is not None and interval_override is not None:
-            return _ParsedSwingCommand(period_token=period_token, interval_override=interval_override), None
-        period_token = _normalize_period_token(args[1])
-        if period_token is None:
-            return None, usage
-        return _ParsedSwingCommand(period_token=period_token, benchmark_input=args[0]), None
-
-    if len(args) == 3:
-        period_token = _normalize_period_token(args[1])
-        interval_override = _normalize_agg_token(args[2])
-        if period_token is None or interval_override is None:
-            return None, f"Usage: {command_name} <benchmark> <period> [agg]"
-        return _ParsedSwingCommand(
-            period_token=period_token,
-            interval_override=interval_override,
-            benchmark_input=args[0],
-        ), None
-
-    return None, usage
+    """Parse swing arguments through the shared command grammar."""
+    return command_parser.parse_swing_command_args(args, command_name)
 
 
-def _parse_intraday_command_args(args: list[str], command_name: str = "cc") -> tuple[_ParsedIntradayCommand | None, str | None]:
-    """Parse intraday command arguments into a dataclass-driven command spec."""
-    usage = (
-        f"Usage: {command_name} | {command_name} <1m|5m|15m|30m|1hr> | "
-        f"{command_name} <benchmark> | {command_name} <benchmark> <1m|5m|15m|30m|1hr> | "
-        f"{command_name} - <1m|5m|15m|30m|1hr> | {command_name} <benchmark> - <1m|5m|15m|30m|1hr>"
-    )
-    if len(args) == 0:
-        return _ParsedIntradayCommand(), None
-    if args[0] == "-":
-        if len(args) != 2:
-            return None, usage
-        token = args[1].strip().lower()
-        normalized_interval = _REPL_INTRADAY_INTERVAL_ALIASES.get(token)
-        if normalized_interval is None:
-            return None, usage
-        return _ParsedIntradayCommand(interval=normalized_interval), None
-    if len(args) >= 2 and args[1] == "-":
-        if len(args) != 3:
-            return None, usage
-        token = args[2].strip().lower()
-        normalized_interval = _REPL_INTRADAY_INTERVAL_ALIASES.get(token)
-        if normalized_interval is None:
-            return None, usage
-        return _ParsedIntradayCommand(interval=normalized_interval, benchmark_input=args[0]), None
-    if len(args) == 1:
-        # Single token is either supported intraday interval (with aliases) or benchmark override.
-        token = args[0].strip().lower()
-        normalized_interval = _REPL_INTRADAY_INTERVAL_ALIASES.get(token)
-        if normalized_interval is not None:
-            return _ParsedIntradayCommand(interval=normalized_interval), None
-        return _ParsedIntradayCommand(benchmark_input=args[0]), None
-    if len(args) == 2:
-        token = args[1].strip().lower()
-        normalized_interval = _REPL_INTRADAY_INTERVAL_ALIASES.get(token)
-        if normalized_interval is None:
-            return None, usage
-        return _ParsedIntradayCommand(interval=normalized_interval, benchmark_input=args[0]), None
-    return None, usage
+def _parse_intraday_command_args(
+    args: list[str],
+    command_name: str = "cc",
+) -> tuple[_ParsedIntradayCommand | None, str | None]:
+    """Parse intraday arguments through the shared command grammar."""
+    return command_parser.parse_intraday_command_args(args, command_name)
 
 
 def _normalize_compare_period_token(period_token: str) -> str | None:
-    """Normalize compare-period tokens, including month shorthand like `6m`."""
-    normalized = _normalize_period_token(period_token)
-    if normalized is not None:
-        return normalized
-    token = period_token.strip().lower()
-    match = re.fullmatch(r"(\d+)m", token)
-    if not match:
-        return None
-    return _normalize_period_token(f"{match.group(1)}mo")
+    """Normalize a compare period through the shared command grammar."""
+    return command_parser.normalize_compare_period_token(period_token)
 
 
 def _parse_compare_command_args(args: list[str]) -> tuple[_ParsedCompareCommand | None, str | None]:
-    """Parse `cmp` arguments as `<symbols...> [period [agg]]`."""
-    usage = "Usage: cmp <symbol1> <symbol2> [symbolN ...] [period [agg]]"
-    cleaned = [token.strip() for token in args if token.strip()]
-    if len(cleaned) < 2:
-        return None, usage
-    if "--" in cleaned:
-        return None, usage
-
-    period_token = "6mo"
-    interval_override = None
-    symbols_end = len(cleaned)
-
-    # Parse optional tail as either `[period agg]` or `[period]`.
-    # Guardrail: prefer period interpretation for ambiguous tokens like `1y`.
-    if len(cleaned) >= 4:
-        maybe_interval = _normalize_agg_token(cleaned[-1])
-        maybe_period_before = _normalize_compare_period_token(cleaned[-2])
-        if maybe_interval is not None:
-            if maybe_period_before is None:
-                return None, f"Unsupported period token '{cleaned[-2]}'."
-            interval_override = maybe_interval
-            period_token = maybe_period_before
-            symbols_end -= 2
-    if symbols_end == len(cleaned):
-        maybe_interval_tail = _normalize_agg_token(cleaned[-1])
-        maybe_period_tail = _normalize_compare_period_token(cleaned[-1])
-        if maybe_interval_tail is not None and maybe_period_tail is None:
-            return None, usage
-        maybe_period = _normalize_compare_period_token(cleaned[-1])
-        if maybe_period is not None and len(cleaned) >= 3:
-            period_token = maybe_period
-            symbols_end -= 1
-
-    symbols_raw = cleaned[:symbols_end]
-    deduped_symbols = tuple(dict.fromkeys(sym for sym in symbols_raw if sym))
-    if len(deduped_symbols) < 2:
-        return None, "Provide at least two distinct symbols for `cmp`."
-    return _ParsedCompareCommand(symbols=deduped_symbols, period_token=period_token, interval_override=interval_override), None
+    """Parse comparison arguments through the shared command grammar."""
+    return command_parser.parse_compare_command_args(args)
 
 
 def _resolve_benchmark_for_table(
@@ -2828,16 +2452,8 @@ def _print_watchlist_snapshot(watchlist_name: str) -> int:
 
 
 def _parse_moves_period(args: list[str]) -> tuple[str | None, str | None]:
-    """Parse `moves` period argument and enforce supported horizons."""
-    if len(args) > 1:
-        return None, f"Usage: moves [{_ANALYTICS_PERIOD_HINT}]"
-    if not args:
-        return "1mo", None
-
-    token = _normalize_period_token(args[0])
-    if not _is_analytics_period_token(token):
-        return None, f"Usage: moves [{_ANALYTICS_PERIOD_HINT}]"
-    return token, None
+    """Parse a moves period through the shared command grammar."""
+    return command_parser.parse_moves_period(args, _ANALYTICS_PERIOD_HINT)
 
 
 def _parse_scope_override_with_period(
@@ -2849,45 +2465,15 @@ def _parse_scope_override_with_period(
     period_validator: Callable[[str | None], bool] | None = None,
     period_hint: str | None = None,
 ) -> tuple[list[str] | None, str | None, str | None]:
-    """Parse optional `on <codes...> [period]` grammar for analytics commands."""
-    if period_validator is None:
-        token_set = period_tokens or set()
-        period_validator = lambda token: token in token_set if token is not None else False
-    if period_hint is None:
-        if period_tokens:
-            period_hint = "|".join(sorted(period_tokens, key=lambda token: (_period_token_days(token) or 0, token)))
-        else:
-            period_hint = "period"
-    usage = f"Usage: {command_name} [{period_hint}] | {command_name} on <code1> <code2> ... [{period_hint}]"
-    cleaned = [token.strip() for token in args if token.strip()]
-    if not cleaned:
-        return None, default_period, None
-
-    if cleaned[0].lower() != "on":
-        if len(cleaned) != 1:
-            return None, None, usage
-        token = _normalize_period_token(cleaned[0])
-        if not period_validator(token):
-            return None, None, usage
-        return None, token, None
-
-    if len(cleaned) < 2:
-        return None, None, usage
-
-    # Decision block: when `on` is present, parse symbols first and treat a valid trailing
-    # period token as optional override. Any invalid trailing period-like token is rejected.
-    symbol_inputs = cleaned[1:]
-    period_token = default_period
-    if len(symbol_inputs) > 1:
-        maybe_period = _normalize_period_token(symbol_inputs[-1])
-        if period_validator(maybe_period):
-            period_token = maybe_period
-            symbol_inputs = symbol_inputs[:-1]
-        elif maybe_period is not None:
-            return None, None, usage
-    if not symbol_inputs:
-        return None, None, usage
-    return symbol_inputs, period_token, None
+    """Parse analytics scope and period through the shared command grammar."""
+    return command_parser.parse_scope_override_with_period(
+        args,
+        command_name=command_name,
+        period_tokens=period_tokens,
+        default_period=default_period,
+        period_validator=period_validator,
+        period_hint=period_hint,
+    )
 
 
 def _parse_scope_override_no_period(
@@ -2895,117 +2481,23 @@ def _parse_scope_override_no_period(
     *,
     command_name: str,
 ) -> tuple[list[str] | None, str | None]:
-    """Parse optional `on <codes...>` grammar for no-period analytics commands."""
-    usage = f"Usage: {command_name} | {command_name} on <code1> <code2> ..."
-    cleaned = [token.strip() for token in args if token.strip()]
-    if not cleaned:
-        return None, None
-    if cleaned[0].lower() != "on" or len(cleaned) < 2:
-        return None, usage
-    return cleaned[1:], None
+    """Parse analytics scope through the shared command grammar."""
+    return command_parser.parse_scope_override_no_period(args, command_name=command_name)
 
 
 def _is_analytics_period_token(token: str | None) -> bool:
-    """Return True for analytics-board period tokens (`Nd`, `Nmo<12`, `Ny`)."""
-    if token is None:
-        return False
-    match = re.fullmatch(r"(\d+)(d|mo|y)", token)
-    if not match:
-        return False
-    count = int(match.group(1))
-    unit = match.group(2)
-    if count <= 0:
-        return False
-    if unit == "mo":
-        return count < 12
-    return True
+    """Return whether a token follows the analytics period grammar."""
+    return command_parser.is_analytics_period_token(token)
 
 
 def _parse_relret_args(args: list[str]) -> tuple[list[str] | None, str | None, str | None, str | None]:
-    """Parse `relret` grammar with optional explicit symbols and benchmark override.
-
-    Supported forms:
-    - `relret [period] [vs <benchmark>]`
-    - `relret [period] vs <benchmark> [period]`
-    - `relret on <code1> <code2> ... [period] [vs <benchmark> [period]]`
-    """
-    usage = (
-        f"Usage: relret [{_ANALYTICS_PERIOD_HINT}] [vs <benchmark>] | "
-        f"relret on <code1> <code2> ... [{_ANALYTICS_PERIOD_HINT}] [vs <benchmark>]"
-    )
-    cleaned = [token.strip() for token in args if token.strip()]
-    if not cleaned:
-        return None, "1mo", None, None
-
-    benchmark_input: str | None = None
-    period_after_vs: str | None = None
-    head_tokens = cleaned
-    if "vs" in (token.lower() for token in cleaned):
-        # Decision block: keep `vs` syntax explicit and deterministic with one benchmark token,
-        # with optional trailing period token after benchmark.
-        vs_positions = [idx for idx, token in enumerate(cleaned) if token.lower() == "vs"]
-        if len(vs_positions) != 1:
-            return None, None, None, usage
-        vs_idx = vs_positions[0]
-        tail = cleaned[vs_idx + 1 :]
-        if len(tail) not in {1, 2}:
-            return None, None, None, usage
-        benchmark_input = tail[0]
-        if benchmark_input.lower() == "vs":
-            return None, None, None, usage
-        if len(tail) == 2:
-            maybe_period = _normalize_period_token(tail[1])
-            if not _is_analytics_period_token(maybe_period):
-                return None, None, None, usage
-            period_after_vs = maybe_period
-        head_tokens = cleaned[:vs_idx]
-
-    if not head_tokens:
-        if period_after_vs is None:
-            # relret vs <benchmark>
-            return None, "1mo", benchmark_input, None
-        # relret vs <benchmark> <period>
-        return None, period_after_vs, benchmark_input, None
-
-    if head_tokens[0].lower() == "on":
-        if len(head_tokens) < 2:
-            return None, None, None, usage
-        symbol_tokens = head_tokens[1:]
-        period_token = period_after_vs or "1mo"
-        if len(symbol_tokens) > 1:
-            maybe_period = _normalize_period_token(symbol_tokens[-1])
-            if _is_analytics_period_token(maybe_period):
-                if period_after_vs is not None:
-                    return None, None, None, usage
-                period_token = maybe_period
-                symbol_tokens = symbol_tokens[:-1]
-            elif maybe_period is not None:
-                return None, None, None, usage
-        if not symbol_tokens:
-            return None, None, None, usage
-        return symbol_tokens, period_token, benchmark_input, None
-
-    if len(head_tokens) > 1:
-        return None, None, None, usage
-    token = _normalize_period_token(head_tokens[0])
-    if not _is_analytics_period_token(token):
-        return None, None, None, usage
-    if period_after_vs is not None:
-        return None, None, None, usage
-    return None, token, benchmark_input, None
+    """Parse relative-return arguments through the shared command grammar."""
+    return command_parser.parse_relret_args(args, _ANALYTICS_PERIOD_HINT)
 
 
 def _parse_corr_period(args: list[str]) -> tuple[str | None, str | None]:
-    """Parse `corr` period argument and enforce supported horizons."""
-    if len(args) > 1:
-        return None, f"Usage: corr [{_ANALYTICS_PERIOD_HINT}]"
-    if not args:
-        return "1mo", None
-
-    token = _normalize_period_token(args[0])
-    if not _is_analytics_period_token(token):
-        return None, f"Usage: corr [{_ANALYTICS_PERIOD_HINT}]"
-    return token, None
+    """Parse a correlation period through the shared command grammar."""
+    return command_parser.parse_corr_period(args, _ANALYTICS_PERIOD_HINT)
 
 
 def _moves_days_for_period(period_token: str) -> int:
@@ -3554,717 +3046,6 @@ def _run_repl(
             return code
     report_pending = False
 
-    def _print_help(topic: str | None = None) -> None:
-        """Print organized REPL help with command-level usage details."""
-
-        def _print_command_help(
-            command: str,
-            aliases: list[str],
-            usage_lines: list[str],
-            detail_lines: list[str],
-            example_lines: list[str],
-            default_lines: list[str] | None = None,
-        ) -> None:
-            """Print one command reference block."""
-            alias_txt = ", ".join(aliases) if aliases else "none"
-            print(f"\nCommand: {command}")
-            print(f"Aliases: {alias_txt}")
-            print("Usage:")
-            for line in usage_lines:
-                print(f"  {line}")
-            print("Details:")
-            for line in detail_lines:
-                print(f"  - {line}")
-            print("Defaults:")
-            if default_lines:
-                for line in default_lines:
-                    print(f"  - {line}")
-            else:
-                print("  - none")
-            print("Examples:")
-            for line in example_lines:
-                print(f"  {line}")
-            print()
-
-        def _print_overview() -> None:
-            """Print top-level organized command map plus starter examples."""
-            print("\nTickertrail Help")
-            print("===============")
-            print("Use `help <command>` for command-level details.")
-            print("Use `help core|chart|table|watchlist|index` for category summaries.")
-            print()
-            print("Core Commands:")
-            print("  h | help [topic|command]    Show organized help")
-            print("  quote | q                   Show current symbol/index quote")
-            print("  news <code>                 Show recent Yahoo headlines")
-            print("  quit | exit                 Exit")
-            print("  cls | clear                 Clear terminal")
-            print("  reload | r                  Refresh quote + replay last chart/table")
-            print("  !<shell-cmd>                Run shell command")
-            print("  cache                       Show today's persisted history cache summary")
-            print("  cache clear                 Clear today's persisted history cache")
-            print()
-            print("Analytics:")
-            print("  move [period]               Directional move-dot board (alias: moves)")
-            print("  trend                       Current trend-score board (alias: trends)")
-            print("  relret [period]             Relative-return ranking (alias: rr)")
-            print("  corr [period]               Correlation summary")
-            print("  cmp <symbols...> [period [agg]]   Rebased compare table")
-            print()
-            print("Market + Discovery:")
-            print("  <symbol>                    Switch active symbol + quote")
-            print("  code <query>                Fuzzy ticker lookup")
-            print("  news <code>                 Recent Yahoo symbol headlines")
-            print("  index | index list          Index board and symbol catalog")
-            print("  snap                        Active index/watchlist snapshot")
-            print()
-            print("Charts + Tables:")
-            print("  chart swing ... | c ...     Swing chart")
-            print("  chart intra ... | cc ...    Intraday chart")
-            print("  table swing ... | t ...     Swing rebased table")
-            print("  table intra ... | tt ...    Intraday rebased table")
-            print("  <period>                    Shortcut for swing chart period")
-            print()
-            print("Watchlists:")
-            print("  watchlist create|list|open|delete|merge ...")
-            print("  wl ...                      Alias namespace")
-            print("  add|delete|list|ll          Watchlist mode symbol operations")
-            print()
-            print("Quick Start Examples:")
-            print("  help move")
-            print("  help watchlist open")
-            print("  news infy")
-            print("  chart swing nifty 3mo w")
-            print("  table intra nifty 15m")
-            print("  move 1mo")
-            print("  trend")
-            print("  relret 3mo")
-            print("  corr")
-            print("  watchlist create swing")
-            print("  watchlist open swing")
-            print("  add tcs infy reliance")
-            print("  snap")
-            print()
-
-        def _print_topic_summary(normalized_topic: str) -> bool:
-            """Print one category summary and return True when handled."""
-            if normalized_topic in {"core", "general"}:
-                print("\nCore Commands:")
-                print("  h | help [topic|command]")
-                print("  quote | q")
-                print("  quit | exit")
-                print("  cls | clear")
-                print("  reload | r")
-                print("  !<shell-cmd>")
-                print("  cache")
-                print("  cache clear")
-                print("  code <query>")
-                print("  news <code>")
-                print("  cmp <symbols...> [period [agg]]")
-                print("  <period>")
-                print("  <symbol>")
-                print("\nExamples:")
-                print("  help relret")
-                print("  code national thermal")
-                print("  news infy")
-                print("  cmp nifty goldbees hdfcbank 1y w")
-                print()
-                return True
-            if normalized_topic in {"index"}:
-                print("\nIndex Commands:")
-                print("  index")
-                print("  index list")
-                print("  snap")
-                print("  move [period]")
-                print("  trend")
-                print("  relret [period] (alias: rr)")
-                print("  corr [period]")
-                print("\nExamples:")
-                print("  index")
-                print("  index list")
-                print("  nifty")
-                print("  move 1mo")
-                print()
-                return True
-            if normalized_topic in {"chart"}:
-                print("\nChart Commands:")
-                print("  chart swing [<benchmark>] [<period>]")
-                print("  chart swing [<benchmark>] - <period|agg> [agg]")
-                print("  chart intra [<benchmark>] [<1m|5m|15m|30m|1hr>]")
-                print("  chart intra [<benchmark>] - <1m|5m|15m|30m|1hr>")
-                print("  c ...")
-                print("  cc ...")
-                print("\nExamples:")
-                print("  help c")
-                print("  chart swing nifty 6mo")
-                print("  c nifty - 2y mo")
-                print("  cc banknifty 5m")
-                print()
-                return True
-            if normalized_topic in {"table"}:
-                print("\nTable Commands:")
-                print("  table swing [<benchmark>] [<period>]")
-                print("  table swing [<benchmark>] - <period|agg> [agg]")
-                print("  table intra [<benchmark>] [<1m|5m|15m|30m|1hr>]")
-                print("  table intra [<benchmark>] - <1m|5m|15m|30m|1hr>")
-                print("  t ...")
-                print("  tt ...")
-                print("\nExamples:")
-                print("  help tt")
-                print("  table swing nifty - 2y mo")
-                print("  t nifty")
-                print("  tt 15m")
-                print()
-                return True
-            if normalized_topic in {"watchlist", "wl"}:
-                print("\nWatchlist Commands:")
-                print("  watchlist create <name> | wl create <name>")
-                print("  watchlist list | wl list")
-                print("  watchlist open <name> | wl open <name>")
-                print("  watchlist delete <name> | wl delete <name>")
-                print("  watchlist merge <wl1> <wl2> <target> | wl merge ...")
-                print("  watchlist <name> | wl <name>")
-                print("  watchlist   # exit mode")
-                print("  add <codes...>")
-                print("  delete <codes...>")
-                print("  list | ll")
-                print("  snap")
-                print("\nExamples:")
-                print("  watchlist create swing")
-                print("  watchlist open swing")
-                print("  add tcs infy reliance")
-                print("  move")
-                print()
-                return True
-            return False
-
-        normalized = " ".join((topic or "").strip().lower().split())
-        if not normalized:
-            _print_overview()
-            return
-
-        if _print_topic_summary(normalized):
-            return
-
-        command_aliases: dict[str, str] = {
-            "h": "help",
-            "help": "help",
-            "q": "quote",
-            "quote": "quote",
-            "quit": "quit",
-            "exit": "quit",
-            "cls": "clear",
-            "clear": "clear",
-            "cache": "cache",
-            "cache clear": "cache clear",
-            "reload": "reload",
-            "r": "reload",
-            "refresh": "reload",
-            "!": "shell",
-            "!<shell-cmd>": "shell",
-            "code": "code",
-            "news": "news",
-            "index": "index",
-            "index list": "index list",
-            "snap": "snap",
-            "move": "move",
-            "moves": "move",
-            "trend": "trend",
-            "trends": "trend",
-            "relret": "relret",
-            "rr": "relret",
-            "corr": "corr",
-            "cmp": "cmp",
-            "chart": "chart",
-            "chart swing": "chart swing",
-            "chart intra": "chart intra",
-            "c": "c",
-            "cc": "cc",
-            "table": "table",
-            "table swing": "table swing",
-            "table intra": "table intra",
-            "t": "t",
-            "tt": "tt",
-            "watchlist": "watchlist",
-            "watchlist create": "watchlist create",
-            "watchlist list": "watchlist list",
-            "watchlist open": "watchlist open",
-            "watchlist delete": "watchlist delete",
-            "watchlist merge": "watchlist merge",
-            "wl": "watchlist",
-            "wl create": "watchlist create",
-            "wl list": "watchlist list",
-            "wl open": "watchlist open",
-            "wl delete": "watchlist delete",
-            "wl merge": "watchlist merge",
-            "add": "add",
-            "delete": "delete",
-            "list": "list",
-            "ll": "list",
-            "<period>": "<period>",
-            "<symbol>": "<symbol>",
-        }
-        canonical = command_aliases.get(normalized)
-        if canonical is None:
-            # Keep unknown-topic diagnostics explicit so users can discover the grammar quickly.
-            print(
-                f"Unknown help topic '{topic}'. Try: help move | help trend | help chart swing | help watchlist open",
-                file=sys.stderr,
-            )
-            return
-
-        if canonical == "help":
-            _print_command_help(
-                command="help",
-                aliases=["h"],
-                usage_lines=["help", "help <topic>", "help <command>"],
-                detail_lines=[
-                    "Top-level help is organized by categories and quick-start examples.",
-                    "Topics: core, chart, table, watchlist, index.",
-                    "Command-level help supports canonical commands and aliases.",
-                ],
-                example_lines=["help", "help core", "help move", "help watchlist merge"],
-            )
-            return
-        if canonical == "quote":
-            _print_command_help(
-                command="quote",
-                aliases=["q"],
-                usage_lines=["quote"],
-                detail_lines=[
-                    "Render quote for active stock/index symbol.",
-                    "Unavailable in watchlist mode; exit watchlist or switch to symbol mode first.",
-                ],
-                default_lines=["symbol: current active symbol"],
-                example_lines=["quote", "q"],
-            )
-            return
-        if canonical == "quit":
-            _print_command_help(
-                command="quit",
-                aliases=["exit"],
-                usage_lines=["quit", "exit"],
-                detail_lines=["Exit REPL immediately."],
-                example_lines=["quit"],
-            )
-            return
-        if canonical == "clear":
-            _print_command_help(
-                command="clear",
-                aliases=["cls"],
-                usage_lines=["clear"],
-                detail_lines=["Clear terminal screen and keep REPL session active."],
-                example_lines=["clear"],
-            )
-            return
-        if canonical == "cache":
-            _print_command_help(
-                command="cache",
-                aliases=[],
-                usage_lines=["cache", "cache clear"],
-                detail_lines=[
-                    "Shows today's persisted history cache summary (path, entry count, kinds, symbols).",
-                    "`cache clear` deletes only today's persisted history cache bucket.",
-                ],
-                example_lines=["cache", "cache clear"],
-            )
-            return
-        if canonical == "cache clear":
-            _print_command_help(
-                command="cache clear",
-                aliases=[],
-                usage_lines=["cache clear"],
-                detail_lines=["Clears only today's persisted history cache bucket."],
-                example_lines=["cache clear"],
-            )
-            return
-        if canonical == "reload":
-            _print_command_help(
-                command="reload",
-                aliases=["r", "refresh"],
-                usage_lines=["reload"],
-                detail_lines=["Refresh active quote and replay last non-quote chart/table/compare view."],
-                example_lines=["reload", "r"],
-            )
-            return
-        if canonical == "shell":
-            _print_command_help(
-                command="!<shell-cmd>",
-                aliases=[],
-                usage_lines=["!<shell-cmd>"],
-                detail_lines=["Run shell command in underlying terminal context."],
-                example_lines=["!pwd", "!ls -la data"],
-            )
-            return
-        if canonical == "code":
-            _print_command_help(
-                command="code",
-                aliases=[],
-                usage_lines=["code <query>"],
-                detail_lines=["Fuzzy-lookup likely ticker codes using local NSE universe data."],
-                example_lines=["code national thermal", "code bank of baroda"],
-            )
-            return
-        if canonical == "news":
-            _print_command_help(
-                command="news",
-                aliases=[],
-                usage_lines=["news <code>"],
-                detail_lines=[
-                    "Resolve symbol and print recent Yahoo Finance news headlines.",
-                    "Uses Yahoo `Ticker.news`; availability varies by symbol and region.",
-                ],
-                default_lines=["headline limit: 5"],
-                example_lines=["news infy", "news aapl"],
-            )
-            return
-        if canonical == "index":
-            _print_command_help(
-                command="index",
-                aliases=[],
-                usage_lines=["index"],
-                detail_lines=["Show India and global index board with quote snapshot."],
-                example_lines=["index"],
-            )
-            return
-        if canonical == "index list":
-            _print_command_help(
-                command="index list",
-                aliases=[],
-                usage_lines=["index list"],
-                detail_lines=["Show curated index symbol catalog without live quote fetch."],
-                example_lines=["index list"],
-            )
-            return
-        if canonical == "snap":
-            _print_command_help(
-                command="snap",
-                aliases=[],
-                usage_lines=["snap"],
-                detail_lines=[
-                    "In watchlist mode, shows watchlist snapshot board.",
-                    "Otherwise, in index mode/symbol context, shows active index constituents snapshot.",
-                ],
-                example_lines=["watchlist open swing", "snap", "nifty", "snap"],
-            )
-            return
-        if canonical == "move":
-            _print_command_help(
-                command="move",
-                aliases=["moves"],
-                usage_lines=[
-                    f"move [{_ANALYTICS_PERIOD_HINT}]",
-                    f"move on <code1> <code2> ... [{_ANALYTICS_PERIOD_HINT}]",
-                ],
-                detail_lines=[
-                    "Shows directional dots per symbol for active context (symbol/index/watchlist).",
-                    "Use `on <codes...>` to override active context with explicit symbols.",
-                    "Periods accept Nd, Nmo (<12), or Ny (for example: 5d, 2mo, 3y).",
-                    "Rows are sorted by max green days to least green days.",
-                ],
-                default_lines=["period: 1mo"],
-                example_lines=["move", "moves 3mo", "move on infy tcs reliance 3mo"],
-            )
-            return
-        if canonical == "trend":
-            _print_command_help(
-                command="trend",
-                aliases=["trends"],
-                usage_lines=["trend", "trend on <code1> <code2> ..."],
-                detail_lines=[
-                    "Shows current trend score per symbol as score/total.",
-                    "Use `on <codes...>` to override active context with explicit symbols.",
-                    "Rows are sorted highest trend score ratio first.",
-                ],
-                default_lines=["arguments: none"],
-                example_lines=["trend", "trend on hdfcbank icicibank kotakbank"],
-            )
-            return
-        if canonical == "relret":
-            _print_command_help(
-                command="relret",
-                aliases=["rr"],
-                usage_lines=[
-                    f"relret [{_ANALYTICS_PERIOD_HINT}] [vs <benchmark> [{_ANALYTICS_PERIOD_HINT}]]",
-                    f"relret on <code1> <code2> ... [{_ANALYTICS_PERIOD_HINT}] [vs <benchmark> [{_ANALYTICS_PERIOD_HINT}]]",
-                ],
-                detail_lines=[
-                    "Shows symbol return, benchmark return, and relative return.",
-                    "Use `on <codes...>` to override active context with explicit symbols.",
-                    "Use `vs <benchmark>` to override benchmark selection.",
-                    "Periods accept Nd, Nmo (<12), or Ny (for example: 5d, 2mo, 3y).",
-                    "Rows are sorted by strongest outperformance first.",
-                ],
-                default_lines=["period: 1mo"],
-                example_lines=["relret", "rr 3mo", "relret on tcs infy hcltech 6mo vs it"],
-            )
-            return
-        if canonical == "corr":
-            _print_command_help(
-                command="corr",
-                aliases=[],
-                usage_lines=[
-                    f"corr [{_ANALYTICS_PERIOD_HINT}]",
-                    f"corr on <code1> <code2> ... [{_ANALYTICS_PERIOD_HINT}]",
-                ],
-                detail_lines=[
-                    "Shows compact correlation summary for active context.",
-                    "Use `on <codes...>` to override active context with explicit symbols.",
-                    "Periods accept Nd, Nmo (<12), or Ny (for example: 5d, 2mo, 3y).",
-                    "Sections: most positive pairs, most negative pairs, near-zero diversifier pairs.",
-                ],
-                default_lines=["period: 1mo"],
-                example_lines=["corr", "corr 6mo", "corr on tcs infy reliance 3mo"],
-            )
-            return
-        if canonical == "cmp":
-            _print_command_help(
-                command="cmp",
-                aliases=[],
-                usage_lines=["cmp <symbol1> <symbol2> [symbolN ...] [period [agg]]"],
-                detail_lines=["Compare multiple symbols in a single rebased table."],
-                default_lines=["period: 6mo", "aggregation: auto (from period)"],
-                example_lines=["cmp nifty goldbees hdfcbank 3y w", "cmp tcs infy 1y"],
-            )
-            return
-        if canonical == "chart":
-            _print_command_help(
-                command="chart",
-                aliases=[],
-                usage_lines=["chart swing ...", "chart intra ..."],
-                detail_lines=["Canonical chart family; pick swing or intra sub-command."],
-                example_lines=["help chart swing", "help chart intra"],
-            )
-            return
-        if canonical == "chart swing":
-            _print_command_help(
-                command="chart swing",
-                aliases=["c"],
-                usage_lines=["chart swing [<benchmark>] [<period>]", "chart swing [<benchmark>] - <period|agg> [agg]"],
-                detail_lines=[
-                    "Render swing chart with period and optional aggregation (bin size) override.",
-                    "Active symbol stays unchanged; first positional token overrides benchmark.",
-                ],
-                default_lines=["period: 6mo", "aggregation: auto (from period)", "symbol: current active symbol"],
-                example_lines=["chart swing nifty 3mo", "c nifty - 2y mo", "c 1y"],
-            )
-            return
-        if canonical == "chart intra":
-            _print_command_help(
-                command="chart intra",
-                aliases=["cc"],
-                usage_lines=[
-                    "chart intra [<benchmark>] [<1m|5m|15m|30m|1hr>]",
-                    "chart intra [<benchmark>] - <1m|5m|15m|30m|1hr>",
-                ],
-                detail_lines=[
-                    "Render intraday chart with bin-size interval.",
-                    "Active symbol stays unchanged; first positional token overrides benchmark.",
-                ],
-                default_lines=["interval: 5m", "symbol: current active symbol"],
-                example_lines=["chart intra banknifty 5m", "cc - 15m", "cc nifty - 1hr"],
-            )
-            return
-        if canonical == "c":
-            _print_command_help(
-                command="c",
-                aliases=["chart swing"],
-                usage_lines=["c [<benchmark>] [<period>]", "c [<benchmark>] - <period|agg> [agg]"],
-                detail_lines=[
-                    "Short alias for swing chart command family.",
-                    "Active symbol stays unchanged; first positional token overrides benchmark.",
-                ],
-                default_lines=["period: 6mo", "aggregation: auto (from period)", "symbol: current active symbol"],
-                example_lines=["c", "c 2y", "c nifty - 2y mo"],
-            )
-            return
-        if canonical == "cc":
-            _print_command_help(
-                command="cc",
-                aliases=["chart intra"],
-                usage_lines=["cc [<benchmark>] [<1m|5m|15m|30m|1hr>]", "cc [<benchmark>] - <1m|5m|15m|30m|1hr>"],
-                detail_lines=[
-                    "Short alias for intraday chart command family.",
-                    "Active symbol stays unchanged; first positional token overrides benchmark.",
-                ],
-                default_lines=["interval: 5m", "symbol: current active symbol"],
-                example_lines=["cc", "cc - 15m", "cc nifty - 1hr"],
-            )
-            return
-        if canonical == "table":
-            _print_command_help(
-                command="table",
-                aliases=[],
-                usage_lines=["table swing ...", "table intra ..."],
-                detail_lines=["Canonical table family; pick swing or intra sub-command."],
-                example_lines=["help table swing", "help table intra"],
-            )
-            return
-        if canonical == "table swing":
-            _print_command_help(
-                command="table swing",
-                aliases=["t"],
-                usage_lines=["table swing [<benchmark>] [<period>]", "table swing [<benchmark>] - <period|agg> [agg]"],
-                detail_lines=[
-                    "Render swing rebased stock-vs-benchmark table.",
-                    "Active symbol stays unchanged; first positional token overrides benchmark.",
-                ],
-                default_lines=["period: 6mo", "aggregation: auto (from period)", "symbol: current active symbol"],
-                example_lines=["table swing", "table swing nifty - 2y mo", "t nifty 1y"],
-            )
-            return
-        if canonical == "table intra":
-            _print_command_help(
-                command="table intra",
-                aliases=["tt"],
-                usage_lines=[
-                    "table intra [<benchmark>] [<1m|5m|15m|30m|1hr>]",
-                    "table intra [<benchmark>] - <1m|5m|15m|30m|1hr>",
-                ],
-                detail_lines=[
-                    "Render intraday rebased table with bin-size interval controls.",
-                    "Active symbol stays unchanged; first positional token overrides benchmark.",
-                ],
-                default_lines=["interval: 5m", "symbol: current active symbol"],
-                example_lines=["table intra nifty 1hr", "tt - 15m", "tt nifty - 30m"],
-            )
-            return
-        if canonical == "t":
-            _print_command_help(
-                command="t",
-                aliases=["table swing"],
-                usage_lines=["t [<benchmark>] [<period>]", "t [<benchmark>] - <period|agg> [agg]"],
-                detail_lines=[
-                    "Short alias for swing table command family.",
-                    "Active symbol stays unchanged; first positional token overrides benchmark.",
-                ],
-                default_lines=["period: 6mo", "aggregation: auto (from period)", "symbol: current active symbol"],
-                example_lines=["t", "t nifty", "t nifty - 2y mo"],
-            )
-            return
-        if canonical == "tt":
-            _print_command_help(
-                command="tt",
-                aliases=["table intra"],
-                usage_lines=["tt [<benchmark>] [<1m|5m|15m|30m|1hr>]", "tt [<benchmark>] - <1m|5m|15m|30m|1hr>"],
-                detail_lines=[
-                    "Short alias for intraday table command family.",
-                    "Active symbol stays unchanged; first positional token overrides benchmark.",
-                ],
-                default_lines=["interval: 5m", "symbol: current active symbol"],
-                example_lines=["tt", "tt - 15m", "tt nifty - 1hr"],
-            )
-            return
-        if canonical == "watchlist":
-            _print_command_help(
-                command="watchlist",
-                aliases=["wl"],
-                usage_lines=[
-                    "watchlist",
-                    "watchlist <name>",
-                    "watchlist open <name>",
-                    "watchlist create|list|delete|merge ...",
-                ],
-                detail_lines=[
-                    "Canonical watchlist command family.",
-                    "Bare `watchlist` exits active watchlist mode.",
-                    "`watchlist <name>` is shorthand for `watchlist open <name>`.",
-                ],
-                example_lines=["watchlist list", "watchlist open swing", "watchlist"],
-            )
-            return
-        if canonical == "watchlist create":
-            _print_command_help(
-                command="watchlist create",
-                aliases=["wl create"],
-                usage_lines=["watchlist create <name>"],
-                detail_lines=["Create a new empty watchlist."],
-                example_lines=["watchlist create swing"],
-            )
-            return
-        if canonical == "watchlist list":
-            _print_command_help(
-                command="watchlist list",
-                aliases=["wl list", "wl"],
-                usage_lines=["watchlist list"],
-                detail_lines=["List all watchlists with symbol counts."],
-                example_lines=["watchlist list", "wl"],
-            )
-            return
-        if canonical == "watchlist open":
-            _print_command_help(
-                command="watchlist open",
-                aliases=["watchlist <name>", "wl open", "wl <name>"],
-                usage_lines=["watchlist open <name>", "watchlist <name>"],
-                detail_lines=["Enter watchlist mode; prompt changes to `tt>watchlist><name>>`."],
-                example_lines=["watchlist open swing", "wl swing"],
-            )
-            return
-        if canonical == "watchlist delete":
-            _print_command_help(
-                command="watchlist delete",
-                aliases=["wl delete"],
-                usage_lines=["watchlist delete <name>"],
-                detail_lines=["Delete one watchlist by name."],
-                example_lines=["watchlist delete swing"],
-            )
-            return
-        if canonical == "watchlist merge":
-            _print_command_help(
-                command="watchlist merge",
-                aliases=["wl merge"],
-                usage_lines=["watchlist merge <wl1> <wl2> <target>"],
-                detail_lines=["Merge two watchlists into target with de-duplicated stable order."],
-                example_lines=["watchlist merge swing momentum core"],
-            )
-            return
-        if canonical == "add":
-            _print_command_help(
-                command="add",
-                aliases=[],
-                usage_lines=["add <codes...>"],
-                detail_lines=["Add validated symbols to active watchlist mode."],
-                example_lines=["add tcs infy reliance"],
-            )
-            return
-        if canonical == "delete":
-            _print_command_help(
-                command="delete",
-                aliases=[],
-                usage_lines=["delete <codes...>"],
-                detail_lines=["Delete symbols from active watchlist mode."],
-                example_lines=["delete infy"],
-            )
-            return
-        if canonical == "list":
-            _print_command_help(
-                command="list",
-                aliases=["ll"],
-                usage_lines=["list"],
-                detail_lines=["List symbols in active watchlist mode."],
-                example_lines=["list", "ll"],
-            )
-            return
-        if canonical == "<period>":
-            _print_command_help(
-                command="<period>",
-                aliases=[],
-                usage_lines=["<period>"],
-                detail_lines=["Shortcut for swing chart period token (for example 6mo, 1y, 2y)."],
-                default_lines=["applies to: swing chart shortcut"],
-                example_lines=["6mo", "1y"],
-            )
-            return
-        if canonical == "<symbol>":
-            _print_command_help(
-                command="<symbol>",
-                aliases=[],
-                usage_lines=["<symbol>"],
-                detail_lines=["Switch active symbol (or index alias in index mode) and print quote."],
-                example_lines=["reliance", "nifty", "it"],
-            )
-            return
-
     while True:
         if report_pending:
             _print_network_call_metrics()
@@ -4312,10 +3093,10 @@ def _run_repl(
                 _print_quote(context.symbol, context.symbol, include_after_hours=True, preloaded_info=context.info)
                 continue
             if lower in {"h", "help"}:
-                _print_help(None)
+                repl_help.print_help(None, _ANALYTICS_PERIOD_HINT)
                 continue
             if lower.startswith("help "):
-                _print_help(cmd.split(maxsplit=1)[1].strip())
+                repl_help.print_help(cmd.split(maxsplit=1)[1].strip(), _ANALYTICS_PERIOD_HINT)
                 continue
             if lower in {"cls", "clear"}:
                 # ANSI clear-screen + cursor-home; keep REPL session active.

@@ -137,7 +137,7 @@ Persistence conventions:
 Design a small architecture for tickertrail with clear separation:
 
 1) Input grammar layer
-- Pure parse functions.
+- Keep typed, pure parse functions in `command_parser.py`; retain thin `cli.py` wrappers only where compatibility requires them.
 - No network calls.
 - Dataclass output.
 
@@ -150,6 +150,7 @@ Design a small architecture for tickertrail with clear separation:
 - Keep historical close-series retrieval in a reusable module (for example `price_history.py`) with injected downloader/telemetry callbacks so non-CLI workflows can reuse it and tests can stub network cleanly.
 - Keep quote/rebased/compare presentation logic in a reusable views module (for example `views.py`) and let `cli.py` call it as an adapter layer.
 - Keep grouped snapshot/day-range enrichment logic in a reusable service module (for example `snapshot_service.py`) with injected fetch/progress callbacks so index/snap features are reusable outside REPL.
+- Keep canonical index aliases, board membership, Yahoo fetch mappings, expected constituent counts, and prompt labels in `index_config.py`; `cli.py` may expose compatibility aliases but should not duplicate the configuration.
 
 3) Render layer
 - Quote renderer
@@ -161,6 +162,8 @@ Design a small architecture for tickertrail with clear separation:
 - command dispatch
 - active symbol state
 - prompt string generation
+- Keep overview/topic/command help definitions in a data-driven `repl_help.py` module rather than nested in the REPL loop.
+- Keep `cli.py` focused on orchestration; do not reintroduce long presentation catalogs into `_run_repl()`.
 
 Output expected:
 - a short architecture map
@@ -173,9 +176,20 @@ Output expected:
 Create minimal file layout:
 
 - src/tickertrail/cli.py
+- src/tickertrail/command_parser.py
+- src/tickertrail/index_config.py
+- src/tickertrail/repl_help.py
+- src/tickertrail/market_hours.py
+- src/tickertrail/price_history.py
+- src/tickertrail/quote_tools.py
+- src/tickertrail/snapshot_service.py
+- src/tickertrail/timeframe.py
+- src/tickertrail/views.py
 - tests/test_cli_parsing.py
-- tests/test_cli_validation.py
-- tests/test_cli_prompt_and_format.py
+- tests/test_cli_commands.py
+- tests/test_cli_branches.py
+- tests/test_command_parser.py
+- tests/test_repl_help.py
 
 Conventions:
 - docstrings on every function (including nested local helpers).

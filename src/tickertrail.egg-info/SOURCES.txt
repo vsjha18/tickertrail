@@ -3,9 +3,12 @@ README.md
 pyproject.toml
 src/tickertrail/__init__.py
 src/tickertrail/cli.py
+src/tickertrail/command_parser.py
+src/tickertrail/index_config.py
 src/tickertrail/market_hours.py
 src/tickertrail/price_history.py
 src/tickertrail/quote_tools.py
+src/tickertrail/repl_help.py
 src/tickertrail/snapshot_service.py
 src/tickertrail/timeframe.py
 src/tickertrail/views.py
@@ -20,4 +23,6 @@ tests/test_cli_cache_command.py
 tests/test_cli_commands.py
 tests/test_cli_parsing.py
 tests/test_cli_quote_behaviors.py
+tests/test_command_parser.py
 tests/test_price_history_cache.py
+tests/test_repl_help.py
