@@ -59,14 +59,6 @@ _PROGRESS_STATE: dict[str, Any] = {"active": False, "emitted": False}
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 _INDEX_EXPECTED_CONSTITUENT_COUNTS = index_config.EXPECTED_CONSTITUENT_COUNTS
 _SNAP_ALLOWED_INDEX_SYMBOLS = index_config.SNAP_ALLOWED_SYMBOLS
-_MOVES_DAYS_BY_PERIOD: dict[str, int] = {
-    "7d": 7,
-    "1mo": 30,
-    "3mo": 90,
-    "6mo": 180,
-    "9mo": 270,
-    "1y": 365,
-}
 _ANALYTICS_PERIOD_HINT = command_parser.ANALYTICS_PERIOD_HINT
 _INDEX_BOARD_SYMBOLS = index_config.BOARD_SYMBOLS
 _INDEX_PROMPT_LABELS = index_config.PROMPT_LABELS
@@ -2501,8 +2493,9 @@ def _parse_corr_period(args: list[str]) -> tuple[str | None, str | None]:
 
 
 def _moves_days_for_period(period_token: str) -> int:
-    """Return calendar days to render move dots for one supported period token."""
-    return _MOVES_DAYS_BY_PERIOD.get(period_token, 30)
+    """Return the requested move-dot count from any normalized analytics period."""
+    days = timeframe.period_token_days(period_token)
+    return days if days is not None else 30
 
 
 def _period_return_from_closes(closes: list[float]) -> float | None:
@@ -2926,7 +2919,7 @@ def _print_moves_snapshot(
     )
     if freshness_line:
         print(freshness_line)
-    print(f"{'Symbol':<16} {f'{period_label} Moves':<12} Dots")
+    print(f"{'Symbol':<16} {'Up Days':<12} Dots")
 
     rows: list[tuple[str, str, int | None, int]] = []
     lookback_days = max((days + 1) * 3, 30)
@@ -2946,8 +2939,9 @@ def _print_moves_snapshot(
             return (1, 0, original_idx)
         return (0, -green_days, original_idx)
 
-    for symbol, dots_txt, _green_days, _idx in sorted(rows, key=_moves_sort_key):
-        print(f"{symbol:<16} {f'{period_label} Moves':<12} {dots_txt}")
+    for symbol, dots_txt, green_days, _idx in sorted(rows, key=_moves_sort_key):
+        up_days = "n/a" if green_days is None else f"{green_days}/{days}"
+        print(f"{symbol:<16} {up_days:<12} {dots_txt}")
     return 0
 
 

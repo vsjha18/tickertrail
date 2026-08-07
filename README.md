@@ -184,10 +184,10 @@ PE(TTM) 30.80 | PEG 2.10 | ROE 30.20%
 tt> move on infy tcs reliance 1mo
 
 Moves (1MO) - Explicit symbols
-Symbol           1MO Moves    Dots
-INFY.NS          1MO Moves    oooooooooooooooooooooooooooooo
-TCS.NS           1MO Moves    oooooooooooooooooooooooooooooo
-RELIANCE.NS      1MO Moves    oooooooooooooooooooooooooooooo
+Symbol           Up Days      Dots
+INFY.NS          18/30        oooooooooooooooooooooooooooooo
+TCS.NS           16/30        oooooooooooooooooooooooooooooo
+RELIANCE.NS      14/30        oooooooooooooooooooooooooooooo
 ```
 
 ### Trend Board

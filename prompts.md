@@ -466,8 +466,8 @@ moves behavior:
 - Works in watchlist mode and for active index symbols with configured constituents.
 - Canonical command is `move`; keep `moves` as an alias.
 - Supports explicit override grammar: `move on <code1> <code2> ... [period]` (alias: `moves on ...`).
-- Supported periods: `7d`, `1mo`, `3mo`, `6mo`, `9mo`, `1y` (default `1mo`).
-- Render one move-dot row per symbol and sort rows by green-day count descending (max green days first).
+- Supported periods: `Nd`, `Nmo` where `N < 12`, and `Ny` (default `1mo`). Convert the normalized period to its corresponding move-dot count instead of falling back to 30 dots for custom periods such as `2d`.
+- Render one move-dot row per symbol with an `Up Days` value (`green days / requested dots`) and sort rows by green-day count descending (max green days first).
 - For index symbols without configured constituent universe, fall back to a single row for the index symbol itself.
 
 trend behavior:

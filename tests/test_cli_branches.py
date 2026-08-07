@@ -687,6 +687,9 @@ class BranchHelperTests(unittest.TestCase):
         self.assertEqual(cli._parse_moves_period(["11mo"]), ("11mo", None))
         self.assertIsNone(cli._parse_moves_period(["12mo"])[0])
         self.assertEqual(cli._parse_moves_period(["1mo", "1y"])[0], None)
+        self.assertEqual(cli._moves_days_for_period("2d"), 2)
+        self.assertEqual(cli._moves_days_for_period("2mo"), 60)
+        self.assertEqual(cli._moves_days_for_period("2y"), 730)
         self.assertAlmostEqual(cli._period_return_from_closes([100.0, 110.0]) or 0.0, 10.0, places=8)
         self.assertIsNone(cli._period_return_from_closes([100.0]))
         self.assertIsNone(cli._period_return_from_closes([0.0, 10.0]))
@@ -1001,6 +1004,20 @@ class BranchHelperTests(unittest.TestCase):
         self.assertLess(txt.index("A.NS"), txt.index("B.NS"))
         self.assertLess(txt.index("B.NS"), txt.index("C.NS"))
 
+    @patch("tickertrail.cli._batch_live_market_prices", return_value={})
+    @patch("tickertrail.cli._close_series_for_period", return_value=([], [100.0, 101.0, 102.0]))
+    def test_print_moves_snapshot_honors_two_day_period(self, mock_close, _mock_batch_prices):
+        """Render exactly two moves and a useful up-day summary for `moves 2d`."""
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._print_moves_snapshot(current_symbol="A.NS", active_watchlist=None, period_token="2d")
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(mock_close.call_args.args[:2], ("A.NS", "30d"))
+        rendered = out.getvalue()
+        self.assertIn("Symbol           Up Days      Dots", rendered)
+        self.assertIn("A.NS             2/2          oo", rendered)
+        self.assertNotIn("2D Moves", rendered)
+
     @patch("tickertrail.cli._overlay_market_price_on_closes")
     @patch("tickertrail.cli._batch_live_market_prices", return_value={"A.NS": 8.0})
     @patch("tickertrail.cli._close_series_for_period", return_value=([], [1.0, 2.0, 3.0, 4.0]))
@@ -1097,7 +1114,8 @@ class BranchHelperTests(unittest.TestCase):
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._print_trend_snapshot", return_value=0)
-    def test_run_repl_trend_command_and_usage(self, mock_trend, _mock_hist):
+    @patch("tickertrail.cli._print_quote", return_value=0)
+    def test_run_repl_trend_command_and_usage(self, _mock_quote, mock_trend, _mock_hist):
         with patch("builtins.input", side_effect=["trend", "trend 3mo", "exit"]):
             with patch("sys.stderr", new_callable=io.StringIO) as err:
                 rc = cli._run_repl("BEL", "BEL.NS", {"regularMarketPrice": 1.0, "regularMarketPreviousClose": 1.0}, 80, 20)
@@ -1426,7 +1444,8 @@ class BranchHelperTests(unittest.TestCase):
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._print_corr_snapshot", return_value=0)
     @patch("tickertrail.cli._print_relret_snapshot", return_value=0)
-    def test_run_repl_relret_and_corr_commands(self, mock_relret, mock_corr, _mock_hist):
+    @patch("tickertrail.cli._print_quote", return_value=0)
+    def test_run_repl_relret_and_corr_commands(self, _mock_quote, mock_relret, mock_corr, _mock_hist):
         with patch(
             "builtins.input",
             side_effect=[
@@ -1463,7 +1482,8 @@ class BranchHelperTests(unittest.TestCase):
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._print_trend_snapshot", return_value=0)
     @patch("tickertrail.cli._print_moves_snapshot", return_value=0)
-    def test_run_repl_move_and_trends_aliases(self, mock_moves, mock_trend, _mock_hist):
+    @patch("tickertrail.cli._print_quote", return_value=0)
+    def test_run_repl_move_and_trends_aliases(self, _mock_quote, mock_moves, mock_trend, _mock_hist):
         with patch(
             "builtins.input",
             side_effect=["move", "moves 3mo", "moves on infy tcs 7d", "trends", "trend on infy tcs", "exit"],
@@ -2476,7 +2496,8 @@ class BranchRenderAndReplTests(unittest.TestCase):
         self.assertEqual(prompts, ["tt> "])
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
-    def test_run_repl_starts_with_stock_prompt_for_active_symbol(self, _mock_hist):
+    @patch("tickertrail.cli._print_quote", return_value=0)
+    def test_run_repl_starts_with_stock_prompt_for_active_symbol(self, _mock_quote, _mock_hist):
         prompts: list[str] = []
         commands = iter(["exit"])
 
