@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pandas as pd
 
@@ -2364,6 +2364,78 @@ class BranchRenderAndReplTests(unittest.TestCase):
         self.assertIn("Already exists in swing: TCS.NS", txt)
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
+    @patch("tickertrail.cli._clear_watchlist", return_value=(0, 2))
+    @patch("tickertrail.cli._watchlist_symbols", return_value=["TCS.NS", "INFY.NS"])
+    def test_run_repl_watchlist_delete_all_confirms_and_clears(
+        self,
+        _mock_symbols,
+        mock_clear,
+        _mock_hist,
+    ):
+        """Clear an active watchlist after an explicit affirmative confirmation."""
+        with patch("builtins.input", side_effect=["watchlist open kite", "delete all", "yes", "exit"]), patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as out:
+            rc = cli._run_repl(None, None, None, 80, 20)
+        self.assertEqual(rc, 0)
+        mock_clear.assert_called_once_with("kite")
+        self.assertIn("Deleted all 2 symbols from kite.", out.getvalue())
+
+    @patch("tickertrail.cli._enable_repl_history", return_value=None)
+    @patch("tickertrail.cli._clear_watchlist")
+    @patch("tickertrail.cli._watchlist_symbols")
+    def test_run_repl_watchlist_delete_all_cancel_empty_and_error_paths(
+        self,
+        mock_symbols,
+        mock_clear,
+        _mock_hist,
+    ):
+        """Keep bulk deletion safe across cancellation, empty, and read-error states."""
+        mock_symbols.side_effect = [["TCS.NS"], ["TCS.NS"], [], None]
+        with patch(
+            "builtins.input",
+            side_effect=[
+                "watchlist open kite",
+                "delete all",
+                "no",
+                "delete all",
+                "delete all",
+                "exit",
+            ],
+        ), patch("tickertrail.cli._watchlist_last_error", return_value=None), patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as out, patch(
+            "sys.stderr", new_callable=io.StringIO
+        ) as err:
+            rc = cli._run_repl(None, None, None, 80, 20)
+        self.assertEqual(rc, 0)
+        mock_clear.assert_not_called()
+        self.assertIn("Delete all cancelled.", out.getvalue())
+        self.assertIn("already empty", out.getvalue())
+        self.assertIn("not found", err.getvalue().lower())
+
+    @patch("tickertrail.cli._enable_repl_history", return_value=None)
+    @patch("tickertrail.cli._clear_watchlist")
+    @patch("tickertrail.cli._watchlist_symbols", return_value=["TCS.NS"])
+    def test_run_repl_watchlist_delete_all_reports_mutation_errors(
+        self,
+        _mock_symbols,
+        mock_clear,
+        _mock_hist,
+    ):
+        """Report database and missing-watchlist failures during confirmed bulk deletion."""
+        mock_clear.side_effect = [(3, 0), (2, 0)]
+        with patch(
+            "builtins.input",
+            side_effect=["watchlist open kite", "delete all", "yes", "delete all", "yes", "exit"],
+        ), patch("sys.stderr", new_callable=io.StringIO) as err:
+            rc = cli._run_repl(None, None, None, 80, 20)
+        self.assertEqual(rc, 0)
+        self.assertEqual(mock_clear.call_count, 2)
+        self.assertIn("Could not read watchlists database.", err.getvalue())
+        self.assertIn("Watchlist 'kite' not found.", err.getvalue())
+
+    @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._merge_watchlists", return_value=(0, "Watchlist 'combo' created by merging 'a' + 'b' (2 symbols)."))
     @patch("tickertrail.cli._watchlist_symbols")
     def test_run_repl_watchlist_merge_and_open(self, mock_watch_symbols, mock_merge, _mock_hist):
@@ -2532,6 +2604,50 @@ class BranchRenderAndReplTests(unittest.TestCase):
             rc = cli._run_repl(None, None, None, 80, 20)
         self.assertEqual(rc, 0)
         self.assertEqual(prompts, ["tt> ", "tt>watchlist>sharekhan> ", "tt>index>bank> "])
+
+    @patch("tickertrail.cli._enable_repl_history", return_value=None)
+    @patch("tickertrail.cli.repl_help.print_stage_help")
+    @patch("tickertrail.cli._watchlist_symbols", return_value=[])
+    def test_run_repl_question_mark_shows_watchlist_stage_help_without_symbol_lookup(
+        self,
+        _mock_symbols,
+        mock_stage_help,
+        _mock_hist,
+    ):
+        """Route `?` to contextual watchlist help before ticker resolution."""
+        with patch("builtins.input", side_effect=["watchlist open kite", "?", "exit"]), patch(
+            "tickertrail.cli._resolve_symbol_with_fallback"
+        ) as mock_resolve:
+            rc = cli._run_repl(None, None, None, 80, 20)
+        self.assertEqual(rc, 0)
+        mock_stage_help.assert_called_once_with("watchlist", "watchlist: kite")
+        mock_resolve.assert_not_called()
+
+    @patch("tickertrail.cli._enable_repl_history", return_value=None)
+    @patch("tickertrail.cli._print_quote", return_value=0)
+    @patch("tickertrail.cli.repl_help.print_stage_help")
+    @patch("tickertrail.cli._resolve_symbol_with_fallback")
+    def test_run_repl_question_mark_tracks_base_stock_and_index_stages(
+        self,
+        mock_resolve,
+        mock_stage_help,
+        _mock_quote,
+        _mock_hist,
+    ):
+        """Select contextual `?` help as the active prompt changes stage."""
+        quote_info = {"regularMarketPrice": 1.0, "regularMarketPreviousClose": 1.0}
+        mock_resolve.side_effect = [("BEL.NS", quote_info), ("^NSEBANK", quote_info)]
+        with patch("builtins.input", side_effect=["?", "bel", "?", "bank", "?", "exit"]):
+            rc = cli._run_repl(None, None, None, 80, 20)
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            mock_stage_help.call_args_list,
+            [
+                call("base", "tt"),
+                call("stock", "stock: bel"),
+                call("index", "index: bank"),
+            ],
+        )
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._resolve_symbol", return_value=("^CNXMNC", {"regularMarketPrice": 1.0}))

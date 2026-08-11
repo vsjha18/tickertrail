@@ -24,6 +24,7 @@ Product contract:
 
 Core commands:
 - `h` / `help [topic|command]`: organized command reference with examples; topic shortcuts include `core`, `chart`, `table`, `watchlist`, `index`, and `help <command>` prints detailed usage/defaults/examples for that command.
+- `?`: print a concise, network-free command list for the active prompt stage (`tt`, stock, index, or watchlist); watchlist help includes the active watchlist name and only commands applicable from that context.
 - `quote` / `q`: print quote for current symbol/index context (disallow in watchlist mode).
 - `quit` / `exit`: leave REPL.
 - `cls`/`clear`: clear terminal screen (must not trigger symbol resolution).
@@ -55,6 +56,7 @@ Core commands:
   - when a symbol already exists in the active watchlist, print an explicit "already exists" message.
   - validate using bundled local NSE universe data only (no network fetches while adding), merging the main equity CSV with a curated supplemental symbol list for ETF/fund coverage.
 - `delete <code...>`: remove symbols from active watchlist mode.
+- `delete all`: remove every symbol from the active watchlist in one operation after an explicit `yes` confirmation; report the deleted count and handle empty, missing, and database-error states explicitly.
 - `list` in watchlist mode: print symbols in current watchlist.
 - `snap` in watchlist mode: show snapshot for symbols in that watchlist.
 - `move [Nd|Nmo(<12)|Ny]` in watchlist mode: show move-dot rows for all symbols (`moves` alias supported; default `1mo`).
@@ -628,6 +630,7 @@ Keep it concise and factual.
 - Keep user-facing formats stable once accepted.
 - If behavior changes, update help and tests in same patch.
 - REPL should tolerate pasted prompt fragments like `tt>...> command` by extracting the trailing command token.
+- Dispatch `?` before symbol resolution so contextual help can never trigger a ticker lookup or network request.
 - Keep REPL controller state explicit: active symbol/watchlist prompt context should move together, and last-view replay metadata should use typed state instead of ad-hoc string/dict pairs.
 - Grouped snapshot views (`index`, `snap`, watchlist snapshots, index fallback quote payloads) should use batch minute-bar data during market hours, then fall back to daily-close batch data.
 - During grouped market-hours fetches, do not use cached data; retry missing symbols via later batch passes only.

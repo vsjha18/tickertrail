@@ -110,6 +110,7 @@ Many commands are context-sensitive. You usually do not need arguments.
 ### 3) Watchlist mode (`tt>watchlist>sharekhan>`)
 
 - Entered with `watchlist open <name>`.
+- Type `?` to show the commands available from the current prompt; in this mode the list is limited to watchlist operations, applicable analytics, navigation, and general commands.
 - `move`, `trend`, `relret`, `corr` with no arguments run on symbols in that watchlist.
 - `snap` shows the current watchlist snapshot.
 
@@ -350,6 +351,7 @@ Final           118.48      126.02      122.63
 
 ## REPL Basics
 
+- `?`: show a concise command list for the current prompt context (`tt`, stock, index, or watchlist)
 - `h` / `help [topic|command]`: help system
 - `quote` / `q`: show active symbol/index quote
 - `cache`: show today's history cache summary
@@ -407,6 +409,7 @@ Inside watchlist mode (`tt>watchlist>sharekhan>`):
 - `add <code...>`
   - Validates against the bundled local NSE symbol universe without network calls, including the curated ETF/fund supplement shipped with the app.
 - `delete <code...>`
+- `delete all`: remove every symbol from the active watchlist after typing `yes` at the confirmation prompt
 - `list` / `ll`
 - `snap`
 - `move [period]`

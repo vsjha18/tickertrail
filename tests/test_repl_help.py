@@ -23,11 +23,13 @@ class ReplHelpTests(unittest.TestCase):
             repl_help.print_help("rr", "Nd|Nmo(<12)|Ny")
             repl_help.print_help("q", "Nd|Nmo(<12)|Ny")
             repl_help.print_help("cache clear", "Nd|Nmo(<12)|Ny")
+            repl_help.print_help("delete all", "Nd|Nmo(<12)|Ny")
         text = out.getvalue()
         self.assertIn("Command: relret", text)
         self.assertIn("Command: quote", text)
         self.assertIn("symbol: current active symbol", text)
         self.assertIn("Command: cache clear", text)
+        self.assertIn("delete all", text)
         self.assertIn("- none", text)
 
     def test_unknown_topic_reports_to_stderr(self):
@@ -35,6 +37,21 @@ class ReplHelpTests(unittest.TestCase):
         with patch("sys.stderr", new_callable=io.StringIO) as err:
             repl_help.print_help("not-a-command", "Nd|Nmo(<12)|Ny")
         self.assertIn("Unknown help topic", err.getvalue())
+
+    def test_stage_help_renders_context_specific_and_common_commands(self):
+        """Render concise prompt-specific command lists for each REPL stage."""
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            repl_help.print_stage_help("watchlist", "watchlist: kite")
+            repl_help.print_stage_help("unknown")
+            repl_help.print_help("?", "Nd|Nmo(<12)|Ny")
+        text = out.getvalue()
+        self.assertIn("Commands available here (watchlist: kite):", text)
+        self.assertIn("add <codes...>", text)
+        self.assertIn("delete all", text)
+        self.assertIn("watchlist                   Exit watchlist mode", text)
+        self.assertIn("General commands:", text)
+        self.assertIn("Commands available here (unknown):", text)
+        self.assertIn("Command: ?", text)
 
 
 if __name__ == "__main__":

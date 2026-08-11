@@ -314,6 +314,10 @@ class HelperBehaviorTests(unittest.TestCase):
                 self.assertEqual(missing, ["xyz"])
                 self.assertEqual(cli._watchlist_symbols("swing"), ["INFY.NS"])
 
+                rc_clear, deleted_count = cli._clear_watchlist("swing")
+                self.assertEqual((rc_clear, deleted_count), (0, 1))
+                self.assertEqual(cli._watchlist_symbols("swing"), [])
+
                 rc_del, msg_del = cli._delete_watchlist("swing")
                 self.assertEqual(rc_del, 0)
                 self.assertIn("deleted", msg_del.lower())
@@ -498,6 +502,10 @@ class HelperBehaviorTests(unittest.TestCase):
             self.assertEqual(cli._merge_watchlists("core", "growth", "combo"), (3, error))
             self.assertEqual(cli._add_symbols_to_watchlist("core", ["BEL"]), (3, [], ["BEL"], []))
             self.assertEqual(cli._remove_symbols_from_watchlist("core", ["BEL"]), (3, [], ["BEL"]))
+            self.assertEqual(cli._clear_watchlist("core"), (3, 0))
+
+        with patch("tickertrail.cli._load_watchlists_result", return_value=({"core": []}, None)):
+            self.assertEqual(cli._clear_watchlist("missing"), (2, 0))
 
     def test_remove_symbols_from_watchlist_skips_blank_tokens(self):
         with tempfile.TemporaryDirectory() as td:

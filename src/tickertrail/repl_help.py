@@ -17,6 +17,7 @@ class HelpEntry:
 
 
 _COMMAND_ALIASES: dict[str, str] = {
+    "?": "?",
     "h": "help",
     "help": "help",
     "q": "quote",
@@ -69,6 +70,7 @@ _COMMAND_ALIASES: dict[str, str] = {
     "wl merge": "watchlist merge",
     "add": "add",
     "delete": "delete",
+    "delete all": "delete",
     "list": "list",
     "ll": "list",
     "<period>": "<period>",
@@ -84,6 +86,7 @@ _OVERVIEW_LINES = (
     "Use `help core|chart|table|watchlist|index` for category summaries.",
     "",
     "Core Commands:",
+    "  ?                           Show commands for the current prompt",
     "  h | help [topic|command]    Show organized help",
     "  quote | q                   Show current symbol/index quote",
     "  news <code>                 Show recent Yahoo headlines",
@@ -135,6 +138,58 @@ _OVERVIEW_LINES = (
     "  add tcs infy reliance",
     "  snap",
     "",
+)
+
+
+_STAGE_HELP_LINES: dict[str, tuple[str, ...]] = {
+    "base": (
+        "  <symbol>                    Open a stock or index",
+        "  watchlist open <name>       Open a watchlist",
+        "  watchlist create|list|delete|merge ...",
+        "  index | index list          Show indices",
+        "  code <query> | news <code>  Find a ticker or show news",
+        "  cmp <codes...> [period [agg]]",
+    ),
+    "stock": (
+        "  quote | q                   Refresh the active quote",
+        "  c | cc | t | tt ...         Show charts or tables",
+        "  <period>                    Show a swing chart",
+        "  move | trend | relret ...   Analyze the active symbol",
+        "  <symbol>                    Switch stock or index",
+        "  watchlist open <name>       Open a watchlist",
+    ),
+    "index": (
+        "  quote | q | snap            Refresh or show constituents",
+        "  move | trend | relret | corr [period]",
+        "  c | cc | t | tt ...         Show charts or tables",
+        "  <period>                    Show a swing chart",
+        "  <symbol>                    Switch stock or index",
+        "  watchlist open <name>       Open a watchlist",
+    ),
+    "watchlist": (
+        "  add <codes...>              Add symbols",
+        "  delete <codes...> | delete all",
+        "  list | ll                   List symbols",
+        "  snap                        Show watchlist snapshot",
+        "  move [period] | trend       Analyze watchlist symbols",
+        "  relret | rr [period]        Rank relative returns",
+        "  corr [period]               Show correlations",
+        "  <symbol>                    Switch to stock/index mode",
+        "  watchlist                   Exit watchlist mode",
+        "  watchlist create|list|open|delete|merge ...",
+    ),
+}
+
+
+_STAGE_HELP_COMMON_LINES = (
+    "  ?                           Show this prompt-specific list",
+    "  h | help [topic|command]    Show full or detailed help",
+    "  code <query> | news <code>  Find a ticker or show news",
+    "  cmp <codes...> [period [agg]]",
+    "  index | index list          Show indices",
+    "  cache | cache clear         Inspect or clear history cache",
+    "  cls | clear | !<shell-cmd>  Terminal utilities",
+    "  quit | exit                 Exit TickerTrail",
 )
 
 
@@ -216,7 +271,7 @@ _TOPIC_SUMMARIES: dict[str, tuple[str, ...]] = {
         "  watchlist merge <wl1> <wl2> <target> | wl merge ...",
         "  watchlist <name> | wl <name>",
         "  watchlist   # exit mode",
-        "  add <codes...> | delete <codes...> | list | ll | snap",
+        "  add <codes...> | delete <codes...> | delete all | list | ll | snap",
         "",
         "Examples:",
         "  watchlist create swing",
@@ -233,6 +288,12 @@ def _command_entries(period_hint: str) -> dict[str, HelpEntry]:
     swing_usage = ("[<benchmark>] [<period>]", "[<benchmark>] - <period|agg> [agg]")
     intra_usage = ("[<benchmark>] [<1m|5m|15m|30m|1hr>]", "[<benchmark>] - <1m|5m|15m|30m|1hr>")
     return {
+        "?": HelpEntry(
+            "?",
+            usage=("?",),
+            details=("Show only the commands relevant to the current prompt context.",),
+            examples=("?",),
+        ),
         "help": HelpEntry(
             "help",
             ("h",),
@@ -384,7 +445,15 @@ def _command_entries(period_hint: str) -> dict[str, HelpEntry]:
         "watchlist delete": HelpEntry("watchlist delete", ("wl delete",), ("watchlist delete <name>",), ("Delete one saved watchlist.",), examples=("watchlist delete swing",)),
         "watchlist merge": HelpEntry("watchlist merge", ("wl merge",), ("watchlist merge <wl1> <wl2> <target>",), ("Merge two watchlists into a target list without duplicates.",), examples=("watchlist merge swing core combined",)),
         "add": HelpEntry("add", usage=("add <code1> <code2> ...",), details=("Add locally validated NSE symbols in watchlist mode.",), examples=("add tcs infy reliance",)),
-        "delete": HelpEntry("delete", usage=("delete <code1> <code2> ...",), details=("Delete symbols from the active watchlist.",), examples=("delete tcs infy",)),
+        "delete": HelpEntry(
+            "delete",
+            usage=("delete <code1> <code2> ...", "delete all"),
+            details=(
+                "Delete selected symbols from the active watchlist.",
+                "`delete all` removes every symbol after an explicit `yes` confirmation.",
+            ),
+            examples=("delete tcs infy", "delete all"),
+        ),
         "list": HelpEntry("list", ("ll",), ("list", "ll"), ("List symbols in the active watchlist.",), examples=("list",)),
         "<period>": HelpEntry("<period>", usage=("<period>",), details=("Render the active symbol swing chart for the given period.",), examples=("1mo", "2y")),
         "<symbol>": HelpEntry("<symbol>", usage=("<symbol>",), details=("Resolve and switch the active stock or index context.",), examples=("infy", "nifty", "aapl")),
@@ -417,6 +486,20 @@ def _print_command_help(entry: HelpEntry) -> None:
     print("Examples:")
     for line in entry.examples:
         print(f"  {line}")
+    print()
+
+
+def print_stage_help(stage: str, label: str | None = None) -> None:
+    """Render the commands available at the current REPL prompt stage."""
+    normalized_stage = stage.strip().lower()
+    stage_lines = _STAGE_HELP_LINES.get(normalized_stage, _STAGE_HELP_LINES["base"])
+    display_label = (label or normalized_stage).strip()
+    print(f"\nCommands available here ({display_label}):")
+    for line in stage_lines:
+        print(line)
+    print("\nGeneral commands:")
+    for line in _STAGE_HELP_COMMON_LINES:
+        print(line)
     print()
 
 

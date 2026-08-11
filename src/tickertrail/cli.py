@@ -382,6 +382,20 @@ def _remove_symbols_from_watchlist(name: str, symbol_inputs: list[str]) -> tuple
     return 0, removed, missing
 
 
+def _clear_watchlist(name: str) -> tuple[int, int]:
+    """Remove every symbol from one watchlist and return status plus deleted count."""
+    watchlists, error = _load_watchlists_result()
+    cleaned_name = name.strip()
+    if error is not None or watchlists is None:
+        return 3, 0
+    if cleaned_name not in watchlists:
+        return 2, 0
+    deleted_count = len(watchlists[cleaned_name])
+    watchlists[cleaned_name] = []
+    _save_watchlists(watchlists)
+    return 0, deleted_count
+
+
 def _reset_network_call_metrics() -> None:
     """Reset per-command network call counters."""
     _NETWORK_CALL_COUNTS.clear()
@@ -3066,6 +3080,22 @@ def _run_repl(
             if lower in {"quit", "exit"}:
                 _print_network_call_metrics()
                 return 0
+            if lower == "?":
+                # Contextual help must be handled before symbol parsing so it stays local and network-free.
+                if context.watchlist_name:
+                    help_stage = "watchlist"
+                    help_label = f"watchlist: {context.watchlist_name}"
+                elif _is_index_context_symbol(context.symbol):
+                    help_stage = "index"
+                    help_label = f"index: {context.prompt_label or context.symbol}"
+                elif context.symbol:
+                    help_stage = "stock"
+                    help_label = f"stock: {context.prompt_label or context.symbol}"
+                else:
+                    help_stage = "base"
+                    help_label = "tt"
+                repl_help.print_stage_help(help_stage, help_label)
+                continue
             if lower == "cd ..":
                 print("Unknown command 'cd ..'.", file=sys.stderr)
                 continue
@@ -3359,6 +3389,32 @@ def _run_repl(
                     tokens = cmd.split()[1:]
                     if not tokens:
                         print("Usage: delete <stock code> <stock code> ...", file=sys.stderr)
+                        continue
+                    if len(tokens) == 1 and tokens[0].lower() == "all":
+                        # Bulk deletion is intentionally explicit and confirmed before mutating the watchlist.
+                        current_symbols = _watchlist_symbols(context.watchlist_name)
+                        if current_symbols is None:
+                            print(
+                                _watchlist_last_error() or f"Watchlist '{context.watchlist_name}' not found.",
+                                file=sys.stderr,
+                            )
+                            continue
+                        if not current_symbols:
+                            print(f"Watchlist '{context.watchlist_name}' is already empty.")
+                            continue
+                        confirmation = input(
+                            f"Delete all {len(current_symbols)} symbols from '{context.watchlist_name}'? Type yes to confirm: "
+                        )
+                        if confirmation.strip().lower() != "yes":
+                            print("Delete all cancelled.")
+                            continue
+                        rc, deleted_count = _clear_watchlist(context.watchlist_name)
+                        if rc == 3:
+                            print("Could not read watchlists database.", file=sys.stderr)
+                        elif rc != 0:
+                            print(f"Watchlist '{context.watchlist_name}' not found.", file=sys.stderr)
+                        else:
+                            print(f"Deleted all {deleted_count} symbols from {context.watchlist_name}.")
                         continue
                     rc, removed, missing = _remove_symbols_from_watchlist(context.watchlist_name, tokens)
                     if rc == 3:
