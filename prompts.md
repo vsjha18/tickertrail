@@ -424,7 +424,11 @@ Board sorting:
 - Same movement ordering as snap: greens first (largest gain to smallest), then reds (smallest fall to largest), then unknowns.
 - Use canonical index symbols for PSE/PSU BANK (`^CNXPSE`, `^CNXPSUBANK`) to avoid stale synthetic series.
 - For index boards, run one unified three-pass batch cycle across India+Global symbols, then per-symbol fallback only for unresolved rows.
-- Group snapshot fetches use daily batch candles (`5d`, `1d`) plus two intraday minute sessions (`2d`, `1m`) so grouped views stay live without per-symbol quote fan-out.
+- Group snapshot fetches use two intraday minute sessions (`2d`, `1m`) as the primary price/range/previous-close source, requesting daily batch candles (`5d`, `1d`) only for symbols with incomplete minute data.
+- Split grouped snapshot universes into stable, order-preserving batches of at most 20 symbols and pass `threads=False` to yfinance downloads so large indices do not create rate-limit-prone concurrent request bursts.
+- Partition grouped symbols by exchange session: open symbols use uncached minute batches; closed symbols use daily-close batches cached per symbol under the latest completed session date.
+- Before caching a closed-market daily snapshot, compare its candle date with the expected completed session; when the daily endpoint lags, replace it with the final minute-session snapshot and normalize that result as EOD.
+- Keep pre-open and post-close EOD cache keys distinct when they refer to different completed sessions on the same local calendar day.
 - Derive grouped previous close from the final bar of the prior minute session when available, falling back to the daily series with awareness of whether its last row is today's partial candle; restrict live price and day range to the latest minute session.
 - During market hours, grouped views should use the batch minute-bar surface as the primary live path; retry missing symbols in later batch passes instead of switching to per-symbol quote fetches.
 - For known indices, keep one canonical app symbol and one explicit Yahoo fetch symbol; avoid runtime probe lists for stable mappings.
@@ -436,7 +440,7 @@ Board sorting:
 - If batch snapshot lacks both previous-close and direct-change fields for an index row, do one targeted quote fetch for that row to backfill change before rendering `n/a`.
 - Support shorthand nickname inference for index symbols (for example: `bank`, `pharma`, `infra`, `fmcg`, `metal`, `media`, `realty`, `energy`, `defence`/`defense`).
 - Include `cpse` as a shorthand alias for `NIFTY PSE` (`^CNXPSE`).
-- Keep grouped retry policy consistent across multi-symbol quote surfaces (`index`, `snap`, and future grouped views): pass1 full batch, pass2/3 missing-only batch retries, then render unresolved rows as unavailable.
+- Keep grouped retry policy consistent across multi-symbol quote surfaces (`index`, `snap`, and future grouped views): pass1 full batch, pass2/3 missing-only batch retries with 1s/2s large-universe backoff, then render unresolved rows as unavailable.
 - Keep preferred Yahoo fetch mappings explicit and data-backed:
   - `^CNXMIDCAP` -> `NIFTY_MIDCAP_100.NS`
   - `^NIFTYNXT50` -> `NIFTY_NEXT_50.NS`
@@ -632,8 +636,8 @@ Keep it concise and factual.
 - REPL should tolerate pasted prompt fragments like `tt>...> command` by extracting the trailing command token.
 - Dispatch `?` before symbol resolution so contextual help can never trigger a ticker lookup or network request.
 - Keep REPL controller state explicit: active symbol/watchlist prompt context should move together, and last-view replay metadata should use typed state instead of ad-hoc string/dict pairs.
-- Grouped snapshot views (`index`, `snap`, watchlist snapshots, index fallback quote payloads) should use batch minute-bar data during market hours, then fall back to daily-close batch data.
-- During grouped market-hours fetches, do not use cached data; retry missing symbols via later batch passes only.
+- Grouped snapshot views (`index`, `snap`, watchlist snapshots, index fallback quote payloads) should use uncached batch minute-bar data only for currently open exchanges, then use session-keyed persisted daily-close snapshots for closed exchanges.
+- During grouped market-hours fetches, do not use cached data; fetch large universes in sequential batches of at most 20 symbols with download threading disabled, then retry missing symbols via later passes only after a short bounded backoff.
 - Daily analytics commands that depend on the latest point (`move`, `trend`, `relret`, `corr`, and derived current-period calculations) should overlay the current batch minute-market price onto the last daily history point while the market is open; when the market is closed they should stay on EOD history/cache data.
 - Daily analytics commands that use the live overlay should print one explicit freshness line with wording that matches the semantics:
   - `move`: `Latest point overlaid with live price as of HH:MM`

@@ -2,10 +2,33 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import time
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from typing import Any, Callable
 
 import pandas as pd
+
+
+_SNAPSHOT_BATCH_SIZE = 20
+_LARGE_RETRY_DELAYS_SECONDS = (0.0, 1.0, 2.0)
+
+
+def _symbol_batches(symbols: list[str]) -> list[list[str]]:
+    """Split symbols into bounded batches while preserving order and uniqueness."""
+    unique_symbols = list(dict.fromkeys(symbols))
+    return [
+        unique_symbols[start : start + _SNAPSHOT_BATCH_SIZE]
+        for start in range(0, len(unique_symbols), _SNAPSHOT_BATCH_SIZE)
+    ]
+
+
+def _pause_before_large_retry(pass_idx: int, symbol_count: int) -> None:
+    """Apply a short backoff before retrying an unresolved large symbol group."""
+    if pass_idx <= 0 or symbol_count <= _SNAPSHOT_BATCH_SIZE:
+        return
+    delay = _LARGE_RETRY_DELAYS_SECONDS[min(pass_idx, len(_LARGE_RETRY_DELAYS_SECONDS) - 1)]
+    if delay > 0:
+        time.sleep(delay)
 
 
 def fetch_day_range_fallback(
@@ -247,12 +270,38 @@ def enrich_snapshot_day_range_from_symbol_candidates(
         enrich_from_quote_fn(candidate, snapshot)
 
 
+def _symbols_requiring_daily_fallback(symbols: list[str], intraday: pd.DataFrame) -> list[str]:
+    """Return symbols whose minute data cannot provide a complete snapshot."""
+    fallback_symbols: list[str] = []
+    for symbol in symbols:
+        close_series = series_for_symbol_field(intraday, symbol, "Close")
+        low_series = latest_session_series(series_for_symbol_field(intraday, symbol, "Low"))
+        high_series = latest_session_series(series_for_symbol_field(intraday, symbol, "High"))
+        if (
+            close_series is None
+            or previous_intraday_session_close(close_series) is None
+            or low_series is None
+            or high_series is None
+        ):
+            fallback_symbols.append(symbol)
+    return fallback_symbols
+
+
 def batch_index_snapshots(
     symbols: list[str],
     download_fn: Callable[..., pd.DataFrame],
     track_network_call: Callable[[str], None],
 ) -> dict[str, dict[str, float | None]]:
-    """Fetch grouped snapshots using two minute sessions with daily fallback."""
+    """Fetch chunked grouped snapshots using two minute sessions with daily fallback."""
+    batches = _symbol_batches(symbols)
+    if len(batches) > 1:
+        # Large Yahoo requests are split to avoid concurrent request bursts and partial frames.
+        chunked_snapshots: dict[str, dict[str, float | None]] = {}
+        for batch in batches:
+            chunked_snapshots.update(batch_index_snapshots(batch, download_fn, track_network_call))
+        return chunked_snapshots
+
+    symbols = batches[0] if batches else []
     snapshots: dict[str, dict[str, float | None]] = {
         sym: {
             "regularMarketPrice": None,
@@ -268,23 +317,40 @@ def batch_index_snapshots(
     }
     if not symbols:
         return snapshots
-    symbol_str = " ".join(symbols)
     daily = pd.DataFrame()
     intraday = pd.DataFrame()
 
+    # Minute history usually supplies price, range, and the prior session close in one request.
     try:
         track_network_call("yfinance.download")
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            daily = download_fn(symbol_str, period="5d", interval="1d", progress=False, auto_adjust=False)
-    except Exception:
-        daily = pd.DataFrame()
-
-    try:
-        track_network_call("yfinance.download")
-        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            intraday = download_fn(symbol_str, period="2d", interval="1m", progress=False, auto_adjust=False)
+            intraday = download_fn(
+                " ".join(symbols),
+                period="2d",
+                interval="1m",
+                progress=False,
+                auto_adjust=False,
+                threads=False,
+            )
     except Exception:
         intraday = pd.DataFrame()
+
+    # Limit the second request to rows where minute data lacks price, range, or previous close.
+    daily_fallback_symbols = _symbols_requiring_daily_fallback(symbols, intraday)
+    if daily_fallback_symbols:
+        try:
+            track_network_call("yfinance.download")
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                daily = download_fn(
+                    " ".join(daily_fallback_symbols),
+                    period="5d",
+                    interval="1d",
+                    progress=False,
+                    auto_adjust=False,
+                    threads=False,
+                )
+        except Exception:
+            daily = pd.DataFrame()
 
     if daily.empty and intraday.empty:
         return snapshots
@@ -351,6 +417,77 @@ def batch_index_snapshots(
     return snapshots
 
 
+def batch_eod_snapshots(
+    symbols: list[str],
+    download_fn: Callable[..., pd.DataFrame],
+    track_network_call: Callable[[str], None],
+) -> dict[str, dict[str, float | None]]:
+    """Fetch chunked daily-close snapshots for completed market sessions."""
+    batches = _symbol_batches(symbols)
+    if len(batches) > 1:
+        chunked_snapshots: dict[str, dict[str, float | None]] = {}
+        for batch in batches:
+            chunked_snapshots.update(batch_eod_snapshots(batch, download_fn, track_network_call))
+        return chunked_snapshots
+
+    symbols = batches[0] if batches else []
+    snapshots: dict[str, dict[str, float | None]] = {
+        symbol: {
+            "regularMarketPrice": None,
+            "regularMarketPreviousClose": None,
+            "regularMarketDayLow": None,
+            "regularMarketDayHigh": None,
+            "regularMarketChange": None,
+            "regularMarketChangePercent": None,
+            "marketDataTimestamp": None,
+            "marketDataIsIntraday": 0.0,
+        }
+        for symbol in symbols
+    }
+    if not symbols:
+        return snapshots
+
+    try:
+        track_network_call("yfinance.download")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            daily = download_fn(
+                " ".join(symbols),
+                period="5d",
+                interval="1d",
+                progress=False,
+                auto_adjust=False,
+                threads=False,
+            )
+    except Exception:
+        return snapshots
+    if daily.empty:
+        return snapshots
+
+    for symbol in symbols:
+        close_series = series_for_symbol_field(daily, symbol, "Close")
+        low_series = series_for_symbol_field(daily, symbol, "Low")
+        high_series = series_for_symbol_field(daily, symbol, "High")
+        if close_series is None:
+            continue
+        price = float(close_series.iloc[-1])
+        prev = float(close_series.iloc[-2]) if len(close_series) >= 2 else None
+        day_low = float(low_series.iloc[-1]) if low_series is not None else None
+        day_high = float(high_series.iloc[-1]) if high_series is not None else None
+        change = None if prev is None else price - prev
+        change_pct = None if change is None or not prev else (change / prev) * 100
+        snapshots[symbol] = {
+            "regularMarketPrice": price,
+            "regularMarketPreviousClose": prev,
+            "regularMarketDayLow": day_low,
+            "regularMarketDayHigh": day_high,
+            "regularMarketChange": change,
+            "regularMarketChangePercent": change_pct,
+            "marketDataTimestamp": coerce_epoch_seconds(close_series.index[-1]),
+            "marketDataIsIntraday": 0.0,
+        }
+    return snapshots
+
+
 def resolve_group_candidate_snapshots(
     candidate_map: dict[str, list[str]],
     batch_index_snapshots_fn: Callable[[list[str]], dict[str, dict[str, float | None]]],
@@ -396,6 +533,7 @@ def resolve_group_candidate_snapshots(
             to_fetch = all_candidates if pass_idx == 0 else _missing_batch_symbols()
             if not to_fetch:
                 break
+            _pause_before_large_retry(pass_idx, len(all_candidates))
             snapshots.update(batch_index_snapshots_fn(to_fetch))
             passes_used = pass_idx + 1
             _promote_resolved()
@@ -429,6 +567,7 @@ def fetch_group_snapshots_with_retries(
         for pass_idx in range(3):
             if not missing:
                 break
+            _pause_before_large_retry(pass_idx, len(symbols))
             fetched = batch_index_snapshots_fn(missing)
             snapshots.update(fetched)
             passes_used = pass_idx + 1

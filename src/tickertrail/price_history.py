@@ -36,6 +36,16 @@ _CACHE_DIR = _resolve_cache_dir()
 _CACHE_DAY: str | None = None
 _CACHE_STORE: dict[str, dict[str, Any]] | None = None
 _CACHE_METRICS: dict[str, int] = {"hits": 0, "misses": 0}
+_EOD_SNAPSHOT_FIELDS = (
+    "regularMarketPrice",
+    "regularMarketPreviousClose",
+    "regularMarketDayLow",
+    "regularMarketDayHigh",
+    "regularMarketChange",
+    "regularMarketChangePercent",
+    "marketDataTimestamp",
+    "marketDataIsIntraday",
+)
 
 
 def _cache_now() -> dt.datetime:
@@ -110,6 +120,12 @@ def _cache_set(kind: str, symbol: str, period_token: str, interval: str, payload
     record = dict(payload)
     record["_cached_at"] = _cache_now().isoformat()
     _CACHE_STORE[_cache_key(kind, symbol, period_token, interval)] = record
+    _persist_cache_store()
+
+
+def _persist_cache_store() -> None:
+    """Persist the active in-memory cache store with one atomic file replacement."""
+    assert _CACHE_STORE is not None
     try:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
         path = _cache_path_for_day(_CACHE_DAY or _cache_day())
@@ -136,6 +152,40 @@ def clear_history_cache_today() -> bool:
         return True
     except OSError:
         return False
+
+
+def get_eod_snapshots(session_by_symbol: dict[str, str]) -> dict[str, dict[str, float | None]]:
+    """Return cached EOD snapshots keyed by symbol and count each lookup."""
+    snapshots: dict[str, dict[str, float | None]] = {}
+    for symbol, session_date in session_by_symbol.items():
+        cached = _cache_get("eod_snapshot_session", symbol, session_date, "1d")
+        if cached is None:
+            continue
+        snapshot = {field: cached.get(field) for field in _EOD_SNAPSHOT_FIELDS}
+        if snapshot.get("regularMarketPrice") is not None:
+            snapshots[symbol] = snapshot
+    return snapshots
+
+
+def set_eod_snapshots(
+    session_by_symbol: dict[str, str],
+    snapshots: dict[str, dict[str, Any]],
+) -> None:
+    """Persist multiple EOD snapshots in one atomic cache write."""
+    _cache_refresh_day()
+    assert _CACHE_STORE is not None
+    cached_at = _cache_now().isoformat()
+    changed = False
+    for symbol, snapshot in snapshots.items():
+        session_date = session_by_symbol.get(symbol)
+        if session_date is None or snapshot.get("regularMarketPrice") is None:
+            continue
+        payload = {field: snapshot.get(field) for field in _EOD_SNAPSHOT_FIELDS}
+        payload["_cached_at"] = cached_at
+        _CACHE_STORE[_cache_key("eod_snapshot_session", symbol, session_date, "1d")] = payload
+        changed = True
+    if changed:
+        _persist_cache_store()
 
 
 def history_cache_summary_today() -> dict[str, Any]:

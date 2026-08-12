@@ -451,6 +451,7 @@ class BranchHelperTests(unittest.TestCase):
         self.assertEqual(cli._benchmark_symbol_for("AAPL", {"currency": "USD"})[0], "^IXIC")
         self.assertEqual(cli._benchmark_symbol_for("^IXIC", {"currency": "USD"}), (None, None))
         self.assertEqual(cli._market_profile_for("AAPL", {"currency": "USD"})[1:], (9, 30, 16, 0))
+        self.assertEqual(str(cli._market_profile_for("^CNXMIDCAP", None)[0]), "Asia/Kolkata")
 
     def test_extend_intraday_edges_and_downsample(self):
         extended_points, extended_prices = cli._extend_intraday_to_close([], [], "5m", "AAPL", {"currency": "USD"})
@@ -1590,7 +1591,9 @@ class BranchHelperTests(unittest.TestCase):
 
     def test_batch_index_snapshots_empty_and_exception_paths(self):
         self.assertEqual(cli._batch_index_snapshots([]), {})
-        with patch("tickertrail.cli.yf.download", side_effect=RuntimeError("x")):
+        with patch("tickertrail.cli._is_market_open_now", return_value=True), patch(
+            "tickertrail.cli.yf.download", side_effect=RuntimeError("x")
+        ):
             snaps = cli._batch_index_snapshots(["^NSEI"])
         self.assertIn("^NSEI", snaps)
         self.assertIsNone(snaps["^NSEI"]["regularMarketPrice"])
@@ -1672,8 +1675,9 @@ class BranchHelperTests(unittest.TestCase):
             },
             index=idx_i,
         )
-        mock_dl.side_effect = [daily_df, intraday_df]
-        snaps = cli._batch_index_snapshots(["^NSEI"])
+        mock_dl.side_effect = [intraday_df, daily_df]
+        with patch("tickertrail.cli._is_market_open_now", return_value=True):
+            snaps = cli._batch_index_snapshots(["^NSEI"])
         self.assertEqual(snaps["^NSEI"]["regularMarketPrice"], 104.2)
         self.assertEqual(snaps["^NSEI"]["regularMarketPreviousClose"], 100.0)
         self.assertEqual(snaps["^NSEI"]["regularMarketDayLow"], 101.8)
@@ -1682,16 +1686,7 @@ class BranchHelperTests(unittest.TestCase):
         self.assertIsNotNone(snaps["^NSEI"]["marketDataTimestamp"])
 
     @patch("tickertrail.cli.yf.download")
-    def test_batch_index_snapshots_uses_prior_intraday_session_when_daily_history_has_gap(self, mock_dl):
-        daily_index = pd.to_datetime(["2026-07-29", "2026-07-30", "2026-07-31", "2026-08-04"], utc=True)
-        daily_df = pd.DataFrame(
-            {
-                ("Close", "TCS.NS"): [2446.6, 2431.8, 2365.6, 2453.6],
-                ("Low", "TCS.NS"): [2415.1, 2423.0, 2326.1, 2435.1],
-                ("High", "TCS.NS"): [2475.5, 2495.0, 2391.0, 2467.4],
-            },
-            index=daily_index,
-        )
+    def test_batch_index_snapshots_uses_prior_intraday_session_without_daily_fallback(self, mock_dl):
         intraday_index = pd.to_datetime(
             [
                 "2026-08-03 09:15+05:30",
@@ -1709,11 +1704,13 @@ class BranchHelperTests(unittest.TestCase):
             },
             index=intraday_index,
         )
-        mock_dl.side_effect = [daily_df, intraday_df]
+        mock_dl.side_effect = [intraday_df]
 
-        snaps = cli._batch_index_snapshots(["TCS.NS"])
+        with patch("tickertrail.cli._is_market_open_now", return_value=True):
+            snaps = cli._batch_index_snapshots(["TCS.NS"])
 
-        self.assertEqual(mock_dl.call_args_list[1].kwargs["period"], "2d")
+        self.assertEqual(mock_dl.call_args_list[0].kwargs["period"], "2d")
+        self.assertEqual(mock_dl.call_count, 1)
         self.assertEqual(snaps["TCS.NS"]["regularMarketPrice"], 2453.6)
         self.assertEqual(snaps["TCS.NS"]["regularMarketPreviousClose"], 2473.7)
         self.assertAlmostEqual(snaps["TCS.NS"]["regularMarketChange"], -20.1)
@@ -1801,6 +1798,207 @@ class BranchHelperTests(unittest.TestCase):
         snapshots, passes = service.fetch_group_snapshots_with_retries([], MagicMock(), MagicMock(), cli._silent_progress_scope)
         self.assertEqual((snapshots, passes), ({}, 0))
 
+    def test_batch_index_snapshots_chunks_large_groups_and_disables_threads(self):
+        """Split large snapshot groups into sequential download batches."""
+        service = cli.snapshot_service
+        symbols = [f"S{idx}.NS" for idx in range(45)]
+        download = MagicMock(return_value=pd.DataFrame())
+        track = MagicMock()
+
+        snapshots = service.batch_index_snapshots(symbols, download, track)
+
+        self.assertEqual(list(snapshots), symbols)
+        self.assertEqual(download.call_count, 6)
+        intraday_batches = [download.call_args_list[idx].args[0].split() for idx in (0, 2, 4)]
+        self.assertEqual([len(batch) for batch in intraday_batches], [20, 20, 5])
+        self.assertEqual([symbol for batch in intraday_batches for symbol in batch], symbols)
+        self.assertEqual(
+            [download.call_args_list[idx].kwargs["interval"] for idx in range(download.call_count)],
+            ["1m", "1d", "1m", "1d", "1m", "1d"],
+        )
+        self.assertTrue(all(call_item.kwargs["threads"] is False for call_item in download.call_args_list))
+        self.assertEqual(track.call_count, 6)
+
+        eod_download = MagicMock(return_value=pd.DataFrame())
+        eod_track = MagicMock()
+        eod_snapshots = service.batch_eod_snapshots(symbols, eod_download, eod_track)
+        self.assertEqual(list(eod_snapshots), symbols)
+        self.assertEqual(eod_download.call_count, 3)
+        self.assertEqual(
+            [len(call_item.args[0].split()) for call_item in eod_download.call_args_list],
+            [20, 20, 5],
+        )
+        self.assertTrue(all(call_item.kwargs["threads"] is False for call_item in eod_download.call_args_list))
+
+    def test_batch_eod_snapshots_uses_daily_close_fields(self):
+        """Build closed-market snapshots exclusively from daily batch candles."""
+        service = cli.snapshot_service
+        index = pd.to_datetime(["2026-08-10", "2026-08-11"], utc=True)
+        daily = pd.DataFrame(
+            {
+                ("Close", "A.NS"): [100.0, 105.0],
+                ("Low", "A.NS"): [98.0, 102.0],
+                ("High", "A.NS"): [101.0, 106.0],
+            },
+            index=index,
+        )
+        download = MagicMock(return_value=daily)
+
+        snapshots = service.batch_eod_snapshots(["A.NS"], download, MagicMock())
+
+        self.assertEqual(snapshots["A.NS"]["regularMarketPrice"], 105.0)
+        self.assertEqual(snapshots["A.NS"]["regularMarketPreviousClose"], 100.0)
+        self.assertEqual(snapshots["A.NS"]["regularMarketDayLow"], 102.0)
+        self.assertEqual(snapshots["A.NS"]["regularMarketDayHigh"], 106.0)
+        self.assertEqual(snapshots["A.NS"]["marketDataIsIntraday"], 0.0)
+        self.assertEqual(download.call_args.kwargs["interval"], "1d")
+
+    def test_batch_index_snapshots_reuses_closed_market_eod_cache(self):
+        """Fetch a closed-market snapshot once and reuse its session-keyed cache."""
+        snapshot = {
+            "regularMarketPrice": 105.0,
+            "regularMarketPreviousClose": 100.0,
+            "regularMarketDayLow": 102.0,
+            "regularMarketDayHigh": 106.0,
+            "regularMarketChange": 5.0,
+            "regularMarketChangePercent": 5.0,
+            "marketDataTimestamp": dt.datetime(2026, 8, 11, tzinfo=dt.timezone.utc).timestamp(),
+            "marketDataIsIntraday": 0.0,
+        }
+        old_dir = cli.price_history._CACHE_DIR
+        old_day = cli.price_history._CACHE_DAY
+        old_store = cli.price_history._CACHE_STORE
+        old_metrics = dict(cli.price_history._CACHE_METRICS)
+        try:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+                cli.price_history._CACHE_DIR = Path(td)
+                cli.price_history._CACHE_DAY = None
+                cli.price_history._CACHE_STORE = None
+                with patch("tickertrail.price_history._cache_day", return_value="2026-08-12"), patch(
+                    "tickertrail.cli._is_market_open_now", return_value=False
+                ), patch(
+                    "tickertrail.cli.market_hours.latest_completed_session_date",
+                    return_value=dt.date(2026, 8, 11),
+                ), patch(
+                    "tickertrail.cli.snapshot_service.batch_eod_snapshots",
+                    return_value={"A.NS": snapshot},
+                ) as mock_eod:
+                    cli.price_history.reset_cache_metrics()
+                    first = cli._batch_index_snapshots(["A.NS"])
+                    first_metrics = cli.price_history.cache_metrics_snapshot()
+                    cli.price_history.reset_cache_metrics()
+                    second = cli._batch_index_snapshots(["A.NS"])
+                    second_metrics = cli.price_history.cache_metrics_snapshot()
+
+                self.assertEqual(first, second)
+                self.assertEqual(first_metrics, {"hits": 0, "misses": 1})
+                self.assertEqual(second_metrics, {"hits": 1, "misses": 0})
+                mock_eod.assert_called_once()
+        finally:
+            cli.price_history._CACHE_DIR = old_dir
+            cli.price_history._CACHE_DAY = old_day
+            cli.price_history._CACHE_STORE = old_store
+            cli.price_history._CACHE_METRICS = old_metrics
+
+    def test_batch_index_snapshots_replaces_lagging_daily_candle_before_caching(self):
+        """Use the final minute session when Yahoo daily candles lag after close."""
+        stale_daily = {
+            "regularMarketPrice": 100.0,
+            "marketDataTimestamp": dt.datetime(2026, 8, 10, tzinfo=dt.timezone.utc).timestamp(),
+            "marketDataIsIntraday": 0.0,
+        }
+        completed_minute = {
+            "regularMarketPrice": 105.0,
+            "marketDataTimestamp": dt.datetime(2026, 8, 11, 10, 0, tzinfo=dt.timezone.utc).timestamp(),
+            "marketDataIsIntraday": 1.0,
+        }
+
+        with (
+            patch("tickertrail.cli._is_market_open_now", return_value=False),
+            patch(
+                "tickertrail.cli.market_hours.latest_completed_session_date",
+                return_value=dt.date(2026, 8, 11),
+            ),
+            patch("tickertrail.cli.price_history.get_eod_snapshots", return_value={}),
+            patch("tickertrail.cli.price_history.set_eod_snapshots") as mock_cache_set,
+            patch(
+                "tickertrail.cli.snapshot_service.batch_eod_snapshots",
+                return_value={"A.NS": stale_daily},
+            ),
+            patch(
+                "tickertrail.cli.snapshot_service.batch_index_snapshots",
+                return_value={"A.NS": completed_minute},
+            ) as mock_minute,
+        ):
+            snapshots = cli._batch_index_snapshots(["A.NS"])
+
+        mock_minute.assert_called_once_with(["A.NS"], cli.yf.download, cli._track_network_call)
+        self.assertEqual(snapshots["A.NS"]["regularMarketPrice"], 105.0)
+        self.assertEqual(snapshots["A.NS"]["marketDataIsIntraday"], 0.0)
+        cached_snapshots = mock_cache_set.call_args.args[1]
+        self.assertEqual(cached_snapshots["A.NS"]["regularMarketPrice"], 105.0)
+        self.assertEqual(cached_snapshots["A.NS"]["marketDataIsIntraday"], 0.0)
+
+    def test_snapshot_session_date_preserves_daily_label_across_timezones(self):
+        """Treat daily candle timestamps as session labels without timezone drift."""
+        midnight_utc = dt.datetime(2026, 8, 11, tzinfo=dt.timezone.utc).timestamp()
+        daily_snapshot = {
+            "marketDataTimestamp": midnight_utc,
+            "marketDataIsIntraday": 0.0,
+        }
+
+        self.assertEqual(cli._snapshot_session_date("AAPL", daily_snapshot), dt.date(2026, 8, 11))
+        self.assertEqual(
+            cli._format_snapshot_freshness_line({"AAPL": daily_snapshot}, ["AAPL"]),
+            "EOD data as of 11-08-26",
+        )
+
+    def test_latest_completed_session_date_distinguishes_preopen_and_postclose(self):
+        """Use distinct session keys before open and after close on the same day."""
+        india_tz = cli.ZoneInfo("Asia/Kolkata")
+        preopen = dt.datetime(2026, 8, 10, 8, 0, tzinfo=india_tz)
+        postclose = dt.datetime(2026, 8, 10, 16, 0, tzinfo=india_tz)
+        weekend = dt.datetime(2026, 8, 9, 16, 0, tzinfo=india_tz)
+
+        self.assertEqual(
+            cli.market_hours.latest_completed_session_date("INFY.NS", None, preopen),
+            dt.date(2026, 8, 7),
+        )
+        self.assertEqual(
+            cli.market_hours.latest_completed_session_date("INFY.NS", None, postclose),
+            dt.date(2026, 8, 10),
+        )
+        self.assertEqual(
+            cli.market_hours.latest_completed_session_date("INFY.NS", None, weekend),
+            dt.date(2026, 8, 7),
+        )
+
+    def test_fetch_group_snapshots_backs_off_before_large_missing_retry(self):
+        """Pause before retrying only unresolved symbols from a large snapshot group."""
+        service = cli.snapshot_service
+        symbols = [f"S{idx}.NS" for idx in range(25)]
+        first_pass = {
+            symbol: {"regularMarketPrice": None if symbol == "S24.NS" else float(idx + 1)}
+            for idx, symbol in enumerate(symbols)
+        }
+        batch_fetch = MagicMock(
+            side_effect=[first_pass, {"S24.NS": {"regularMarketPrice": 25.0}}]
+        )
+
+        with patch("tickertrail.snapshot_service.time.sleep") as mock_sleep:
+            snapshots, passes = service.fetch_group_snapshots_with_retries(
+                symbols,
+                batch_fetch,
+                MagicMock(),
+                cli._silent_progress_scope,
+            )
+
+        self.assertEqual(passes, 2)
+        self.assertEqual(snapshots["S24.NS"]["regularMarketPrice"], 25.0)
+        self.assertEqual(batch_fetch.call_args_list[0].args[0], symbols)
+        self.assertEqual(batch_fetch.call_args_list[1].args[0], ["S24.NS"])
+        mock_sleep.assert_called_once_with(1.0)
+
     @patch("tickertrail.cli.yf.download")
     def test_batch_index_snapshots_falls_back_to_daily_when_intraday_batch_unavailable(self, mock_dl):
         idx_d = pd.date_range("2026-02-10", periods=3, freq="D", tz="UTC")
@@ -1812,8 +2010,9 @@ class BranchHelperTests(unittest.TestCase):
             },
             index=idx_d,
         )
-        mock_dl.side_effect = [daily_df, RuntimeError("intraday unavailable")]
-        snaps = cli._batch_index_snapshots(["^NSEI"])
+        mock_dl.side_effect = [RuntimeError("intraday unavailable"), daily_df]
+        with patch("tickertrail.cli._is_market_open_now", return_value=True):
+            snaps = cli._batch_index_snapshots(["^NSEI"])
         self.assertEqual(snaps["^NSEI"]["regularMarketPrice"], 101.0)
         self.assertEqual(snaps["^NSEI"]["regularMarketPreviousClose"], 100.0)
         self.assertEqual(snaps["^NSEI"]["regularMarketDayLow"], 99.0)
@@ -1894,7 +2093,9 @@ class BranchHelperTests(unittest.TestCase):
             index=idx_i,
             columns=intraday_cols,
         )
-        with patch("tickertrail.cli.yf.download", side_effect=[daily_df, intraday_df]):
+        with patch("tickertrail.cli._is_market_open_now", return_value=True), patch(
+            "tickertrail.cli.yf.download", side_effect=[intraday_df, daily_df]
+        ):
             snaps = cli._batch_index_snapshots(["^NSEI", "^IXIC"])
         self.assertEqual(snaps["^NSEI"]["regularMarketPrice"], 105.0)
         self.assertEqual(snaps["^NSEI"]["regularMarketPreviousClose"], 101.0)

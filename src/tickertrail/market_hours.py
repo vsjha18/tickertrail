@@ -17,8 +17,8 @@ def market_profile_for(symbol: str, info: dict[str, Any] | None) -> tuple[ZoneIn
         or country == "INDIA"
         or currency == "INR"
         or exchange in {"NSE", "NSI", "BSE"}
-        or upper.startswith("^NSE")
-        or upper == "^BSESN"
+        or upper.startswith(("^NSE", "^CNX", "^NIFTY"))
+        or upper in {"^BSESN", "^INDIAVIX"}
     )
     if is_india:
         return ZoneInfo("Asia/Kolkata"), 9, 15, 15, 30
@@ -34,6 +34,25 @@ def is_market_open_now(symbol: str, info: dict[str, Any] | None) -> bool:
     open_dt = now.replace(hour=oh, minute=om, second=0, microsecond=0)
     close_dt = now.replace(hour=ch, minute=cm, second=0, microsecond=0)
     return open_dt <= now <= close_dt
+
+
+def latest_completed_session_date(
+    symbol: str,
+    info: dict[str, Any] | None,
+    now: dt.datetime | None = None,
+) -> dt.date:
+    """Return the most recent session date whose market close has passed."""
+    tz, _, _, close_hour, close_minute = market_profile_for(symbol, info)
+    local_now = now.astimezone(tz) if now is not None else dt.datetime.now(tz)
+    candidate = local_now.date()
+    close_dt = local_now.replace(hour=close_hour, minute=close_minute, second=0, microsecond=0)
+
+    # Before today's close, the latest completed session is the prior weekday.
+    if local_now.weekday() < 5 and local_now <= close_dt:
+        candidate -= dt.timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate -= dt.timedelta(days=1)
+    return candidate
 
 
 def interval_minutes(interval: str) -> int | None:

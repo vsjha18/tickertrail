@@ -1734,10 +1734,11 @@ def _format_snapshot_freshness_line(
     latest_epoch, used_intraday = _snapshot_freshness(snapshots, symbols)
     if latest_epoch is None:
         return None
-    local_dt = dt.datetime.fromtimestamp(latest_epoch, dt.timezone.utc).astimezone()
     if used_intraday:
+        local_dt = dt.datetime.fromtimestamp(latest_epoch, dt.timezone.utc).astimezone()
         return f"Live prices as of {local_dt.strftime('%H:%M')}"
-    return f"EOD data as of {local_dt.strftime('%d-%m-%y')}"
+    session_date = dt.datetime.fromtimestamp(latest_epoch, dt.timezone.utc).date()
+    return f"EOD data as of {session_date.strftime('%d-%m-%y')}"
 
 
 def _append_header_freshness(header: str, freshness_line: str | None) -> str:
@@ -1774,8 +1775,56 @@ def _enrich_snapshot_day_range_from_symbol_candidates(
 
 
 def _batch_index_snapshots(symbols: list[str]) -> dict[str, dict[str, float | None]]:
-    """Fetch price/change/day-range snapshots for many symbols in batch."""
-    return snapshot_service.batch_index_snapshots(symbols, yf.download, _track_network_call)
+    """Fetch live or cached EOD snapshots according to each symbol's market state."""
+    unique_symbols = list(dict.fromkeys(symbol for symbol in symbols if symbol))
+    if not unique_symbols:
+        return {}
+
+    # Keep open-market prices uncached while routing closed markets through session-keyed EOD cache.
+    open_symbols = [symbol for symbol in unique_symbols if _is_market_open_now(symbol, None)]
+    open_symbol_set = set(open_symbols)
+    closed_symbols = [symbol for symbol in unique_symbols if symbol not in open_symbol_set]
+    snapshots: dict[str, dict[str, float | None]] = {}
+    if open_symbols:
+        snapshots.update(snapshot_service.batch_index_snapshots(open_symbols, yf.download, _track_network_call))
+
+    session_by_symbol = {
+        symbol: market_hours.latest_completed_session_date(symbol, None).isoformat()
+        for symbol in closed_symbols
+    }
+    cached_eod = price_history.get_eod_snapshots(session_by_symbol)
+    snapshots.update(cached_eod)
+    missing_eod = [symbol for symbol in closed_symbols if symbol not in cached_eod]
+    if missing_eod:
+        fetched_eod = snapshot_service.batch_eod_snapshots(missing_eod, yf.download, _track_network_call)
+        stale_eod = [
+            symbol
+            for symbol in missing_eod
+            if _snapshot_session_date(symbol, fetched_eod.get(symbol, {}))
+            != dt.date.fromisoformat(session_by_symbol[symbol])
+        ]
+        if stale_eod:
+            # Yahoo daily candles can lag after close; the final minute session is the accurate EOD fallback.
+            minute_fallback = snapshot_service.batch_index_snapshots(stale_eod, yf.download, _track_network_call)
+            for snapshot in minute_fallback.values():
+                snapshot["marketDataIsIntraday"] = 0.0
+            fetched_eod.update(minute_fallback)
+        snapshots.update(fetched_eod)
+        price_history.set_eod_snapshots(session_by_symbol, fetched_eod)
+
+    return {symbol: snapshots.get(symbol, {}) for symbol in unique_symbols}
+
+
+def _snapshot_session_date(symbol: str, snapshot: dict[str, float | None]) -> dt.date | None:
+    """Return one snapshot timestamp converted to the symbol's market-session date."""
+    epoch = _coerce_epoch_seconds(snapshot.get("marketDataTimestamp"))
+    if epoch is None:
+        return None
+    # Daily indices represent a labeled session date; do not shift that label across timezones.
+    if snapshot.get("marketDataIsIntraday") == 0.0:
+        return dt.datetime.fromtimestamp(epoch, dt.timezone.utc).date()
+    market_tz, _, _, _, _ = _market_profile_for(symbol, None)
+    return dt.datetime.fromtimestamp(epoch, dt.timezone.utc).astimezone(market_tz).date()
 
 
 def _resolve_group_candidate_snapshots(

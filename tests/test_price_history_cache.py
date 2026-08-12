@@ -325,6 +325,40 @@ class DailyHistoryCacheTests(unittest.TestCase):
         price_history.reset_cache_metrics()
         self.assertEqual(price_history.cache_metrics_snapshot(), {"hits": 0, "misses": 0})
 
+    def test_eod_snapshot_cache_is_keyed_by_completed_session(self) -> None:
+        """Reuse EOD snapshots only for the requested completed market session."""
+        snapshot = {
+            "regularMarketPrice": 101.0,
+            "regularMarketPreviousClose": 100.0,
+            "regularMarketDayLow": 99.0,
+            "regularMarketDayHigh": 102.0,
+            "marketDataTimestamp": dt.datetime(2026, 8, 11).timestamp(),
+            "marketDataIsIntraday": 0.0,
+        }
+        old_dir = price_history._CACHE_DIR
+        old_day = price_history._CACHE_DAY
+        old_store = price_history._CACHE_STORE
+        old_metrics = dict(price_history._CACHE_METRICS)
+        try:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+                price_history._CACHE_DIR = Path(td)
+                price_history._CACHE_DAY = None
+                price_history._CACHE_STORE = None
+                with patch("tickertrail.price_history._cache_day", return_value="2026-08-12"):
+                    price_history.set_eod_snapshots({"INFY.NS": "2026-08-11"}, {"INFY.NS": snapshot})
+                    price_history.reset_cache_metrics()
+                    cached = price_history.get_eod_snapshots({"INFY.NS": "2026-08-11"})
+                    stale_for_new_session = price_history.get_eod_snapshots({"INFY.NS": "2026-08-12"})
+
+                self.assertEqual(cached["INFY.NS"]["regularMarketPrice"], 101.0)
+                self.assertEqual(stale_for_new_session, {})
+                self.assertEqual(price_history.cache_metrics_snapshot(), {"hits": 1, "misses": 1})
+        finally:
+            price_history._CACHE_DIR = old_dir
+            price_history._CACHE_DAY = old_day
+            price_history._CACHE_STORE = old_store
+            price_history._CACHE_METRICS = old_metrics
+
     def test_history_cache_summary_today_reports_kind_symbol_period_interval_counts(self) -> None:
         """Cache summary should expose parsed dimensions for today's in-memory cache keys."""
         old_dir = price_history._CACHE_DIR
