@@ -718,7 +718,7 @@ Rendering contract:
 - Make both header rows bold, every strike-spine cell bold, and the complete ATM row bold.
 - Color each call and put half independently green/red based on LTP versus previous close; use neutral gray when change cannot be calculated.
 - Show LTP as `<price> (<signed-percent>%)`; put Delta immediately beside LTP.
-- Also show Vega, Gamma, Theta, IV, volume, and OI.
+- Also show Theta, volume, and OI. Omit IV, Gamma, and Vega so the table remains compact, targeting at most 120 columns for typical values.
 - Select the nearest available strike as ATM; on an exact-distance tie choose the lower strike.
 
 Testing:

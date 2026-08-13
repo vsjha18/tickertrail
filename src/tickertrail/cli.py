@@ -2511,10 +2511,7 @@ def _format_call_chain_cells(side: upstox_service.OptionSide) -> str:
         (
             f"{_fmt_compact_num(side.oi):>7}",
             f"{_fmt_compact_num(side.volume):>7}",
-            f"{_format_chain_scalar(side.iv, 2):>6}",
-            f"{_format_chain_scalar(side.theta, 2):>8}",
-            f"{_format_chain_scalar(side.gamma, 4):>8}",
-            f"{_format_chain_scalar(side.vega, 2):>7}",
+            f"{_format_chain_scalar(side.theta, 2):>7}",
             f"{_format_chain_scalar(side.delta, 3):>7}",
             f"{_format_option_ltp(side):>19}",
         )
@@ -2527,10 +2524,7 @@ def _format_put_chain_cells(side: upstox_service.OptionSide) -> str:
         (
             f"{_format_option_ltp(side):<19}",
             f"{_format_chain_scalar(side.delta, 3):>7}",
-            f"{_format_chain_scalar(side.vega, 2):>7}",
-            f"{_format_chain_scalar(side.gamma, 4):>8}",
-            f"{_format_chain_scalar(side.theta, 2):>8}",
-            f"{_format_chain_scalar(side.iv, 2):>6}",
+            f"{_format_chain_scalar(side.theta, 2):>7}",
             f"{_fmt_compact_num(side.volume):>7}",
             f"{_fmt_compact_num(side.oi):>7}",
         )
@@ -2582,16 +2576,12 @@ def _render_nifty_option_chain(
         f"Updated {updated} · Upstox"
     )
 
-    left_header = (
-        f"{'OI':>7} {'Vol':>7} {'IV%':>6} {'Theta':>8} {'Gamma':>8} "
-        f"{'Vega':>7} {'Delta':>7} {'LTP (Today)':>19}"
-    )
-    strike_header = f"{'Strike':^14}"
+    left_header = f"{'OI':>7} {'Vol':>7} {'Theta':>7} {'Delta':>7} {'LTP (Today)':>19}"
+    strike_header = f"{'Strike':^12}"
     right_header = (
-        f"{'LTP (Today)':<19} {'Delta':>7} {'Vega':>7} {'Gamma':>8} "
-        f"{'Theta':>8} {'IV%':>6} {'Vol':>7} {'OI':>7}"
+        f"{'LTP (Today)':<19} {'Delta':>7} {'Theta':>7} {'Vol':>7} {'OI':>7}"
     )
-    print(_style_text(f"{'CALLS':^{len(left_header)}} │ {'STRIKES':^14} │ {'PUTS':^{len(right_header)}}", bold=True))
+    print(_style_text(f"{'CALLS':^{len(left_header)}} │ {'STRIKES':^12} │ {'PUTS':^{len(right_header)}}", bold=True))
     print(_style_text(f"{left_header} │ {strike_header} │ {right_header}", bold=True))
     print(f"{'─' * len(left_header)}─┼─{'─' * len(strike_header)}─┼─{'─' * len(right_header)}")
 
@@ -2604,7 +2594,7 @@ def _render_nifty_option_chain(
             bold=is_atm,
         )
         strike_label = f"{row.strike:,.0f}{' ATM' if is_atm else ''}"
-        spine = _style_text(f"{strike_label:^14}", bold=True)
+        spine = _style_text(f"{strike_label:^12}", bold=True)
         right = _style_text(
             _format_put_chain_cells(row.put),
             color=_option_side_color(row.put),
