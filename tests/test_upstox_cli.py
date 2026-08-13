@@ -335,6 +335,95 @@ class UpstoxCliTests(unittest.TestCase):
             },
         )
 
+    @patch("tickertrail.cli._enable_repl_history", return_value=None)
+    @patch("tickertrail.cli._print_company_fundamentals", return_value=0)
+    @patch("tickertrail.cli._print_quote", return_value=0)
+    def test_repl_routes_stock_fundmentals_and_alias_without_qualifiers(
+        self, _mock_quote, mock_fundamentals, _mock_history
+    ):
+        """Dispatch only the exact canonical and alias forms from a stock prompt."""
+        with (
+            patch(
+                "builtins.input",
+                side_effect=["fundmentals", "funda", "funda quarterly", "fundmentals x", "exit"],
+            ),
+            patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
+            rc = cli._run_repl(
+                "reliance", "RELIANCE.NS", {"regularMarketPrice": 1.0}, 100, 22
+            )
+        self.assertEqual(rc, 0)
+        self.assertEqual([call.args for call in mock_fundamentals.call_args_list], [("RELIANCE.NS",)] * 2)
+        self.assertEqual(err.getvalue().count("Usage: fundmentals"), 2)
+
+    @patch("tickertrail.cli._enable_repl_history", return_value=None)
+    @patch("tickertrail.cli._print_company_fundamentals", return_value=0)
+    @patch("tickertrail.cli._print_quote", return_value=0)
+    def test_repl_rejects_fundmentals_outside_stock_context(
+        self, _mock_quote, mock_fundamentals, _mock_history
+    ):
+        """Reject root, index, and watchlist execution without making API calls."""
+        with (
+            patch("builtins.input", side_effect=["fundmentals", "exit"]),
+            patch("sys.stderr", new_callable=io.StringIO) as root_err,
+        ):
+            self.assertEqual(cli._run_repl(None, None, None, 100, 22), 0)
+        self.assertIn("requires an active stock", root_err.getvalue())
+
+        with (
+            patch("builtins.input", side_effect=["funda", "exit"]),
+            patch("sys.stderr", new_callable=io.StringIO) as index_err,
+        ):
+            self.assertEqual(
+                cli._run_repl("nifty", "^NSEI", {"regularMarketPrice": 1.0}, 100, 22),
+                0,
+            )
+        self.assertIn("requires an active stock", index_err.getvalue())
+
+        with (
+            patch("tickertrail.cli._watchlist_symbols", return_value=["RELIANCE.NS"]),
+            patch("builtins.input", side_effect=["watchlist open core", "funda", "exit"]),
+            patch("sys.stderr", new_callable=io.StringIO) as watchlist_err,
+        ):
+            self.assertEqual(cli._run_repl(None, None, None, 100, 22), 0)
+        self.assertIn("unavailable in watchlist mode", watchlist_err.getvalue())
+        mock_fundamentals.assert_not_called()
+
+    def test_print_company_fundamentals_tracks_requests_and_handles_errors(self):
+        """Track injected Upstox requests and convert safe service failures to status 3."""
+        snapshot = object()
+
+        def fake_fetch(token, query, *, preferred_exchange, request_json_fn):
+            """Exercise the CLI's tracked request wrapper before returning a sentinel."""
+            self.assertEqual((token, query, preferred_exchange), ("token", "RELIANCE", "NSE"))
+            request_json_fn("/v2/fundamentals/INE/key-ratios", {}, token)
+            return snapshot
+
+        with (
+            patch("tickertrail.cli.upstox_service.load_analytics_token", return_value="token"),
+            patch("tickertrail.cli.upstox_service.request_json", return_value={}) as request,
+            patch(
+                "tickertrail.cli.fundamentals.fetch_company_fundamentals",
+                side_effect=fake_fetch,
+            ),
+            patch("tickertrail.cli.fundamentals.render_company_fundamentals") as render,
+        ):
+            cli._reset_network_call_metrics()
+            self.assertEqual(cli._print_company_fundamentals("RELIANCE.NS"), 0)
+        request.assert_called_once_with("/v2/fundamentals/INE/key-ratios", {}, "token")
+        render.assert_called_once_with(snapshot, cli._style_text)
+        self.assertEqual(cli._NETWORK_CALL_COUNTS, {"upstox.key_ratios": 1})
+
+        with (
+            patch(
+                "tickertrail.cli.upstox_service.load_analytics_token",
+                side_effect=service.UpstoxError("missing token"),
+            ),
+            patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
+            self.assertEqual(cli._print_company_fundamentals("RELIANCE.NS"), 3)
+        self.assertIn("missing token", err.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

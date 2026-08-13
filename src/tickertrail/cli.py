@@ -26,6 +26,7 @@ import plotext as plt
 import yfinance as yf
 
 from . import command_parser
+from . import fundamentals
 from . import index_config
 from . import market_hours
 from . import price_history
@@ -2733,6 +2734,33 @@ def _print_option_chain(
     return 0
 
 
+def _print_company_fundamentals(symbol: str) -> int:
+    """Fetch and render the active stock's consolidated Upstox fundamentals."""
+    target = _option_chain_target(symbol)
+
+    def tracked_request(endpoint: str, params: dict[str, str], token: str) -> dict[str, Any]:
+        """Track one Upstox endpoint before performing its authenticated request."""
+        endpoint_name = endpoint.rsplit("/", 1)[-1].replace("-", "_") or "request"
+        if endpoint_name == "search":
+            endpoint_name = "instrument_search"
+        _track_network_call(f"upstox.{endpoint_name}")
+        return upstox_service.request_json(endpoint, params, token)
+
+    try:
+        token = upstox_service.load_analytics_token()
+        snapshot = fundamentals.fetch_company_fundamentals(
+            token,
+            target.query,
+            preferred_exchange=target.preferred_exchange,
+            request_json_fn=tracked_request,
+        )
+        fundamentals.render_company_fundamentals(snapshot, _style_text)
+    except upstox_service.UpstoxError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+    return 0
+
+
 def _print_watchlist_snapshot(watchlist_name: str) -> int:
     """Render a live snapshot board for one stored watchlist."""
     symbols = _watchlist_symbols(watchlist_name)
@@ -3707,6 +3735,25 @@ def _run_repl(
                     print("No active symbol. Enter an index symbol first.", file=sys.stderr)
                     continue
                 _print_index_constituent_snap(context.symbol)
+                continue
+            if lower in {"fundmentals", "funda"} or lower.startswith(("fundmentals ", "funda ")):
+                # Fundamentals are deliberately stock-context-only and accept no modifiers.
+                if lower not in {"fundmentals", "funda"}:
+                    print("Usage: fundmentals", file=sys.stderr)
+                    continue
+                if context.watchlist_name:
+                    print(
+                        "fundmentals is unavailable in watchlist mode. Open a stock first.",
+                        file=sys.stderr,
+                    )
+                    continue
+                if not context.symbol or _is_index_context_symbol(context.symbol):
+                    print(
+                        "fundmentals requires an active stock. Enter a stock symbol first.",
+                        file=sys.stderr,
+                    )
+                    continue
+                _print_company_fundamentals(context.symbol)
                 continue
             if lower == "chain" or lower.startswith("chain ") or lower == "oc" or lower.startswith("oc "):
                 parts = cmd.split()

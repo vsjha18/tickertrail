@@ -41,6 +41,8 @@ _COMMAND_ALIASES: dict[str, str] = {
     "snap": "snap",
     "chain": "chain",
     "oc": "chain",
+    "fundmentals": "fundmentals",
+    "funda": "fundmentals",
     "config": "config",
     "token": "token",
     "show": "show token",
@@ -101,6 +103,7 @@ _SYMBOL_CONTEXT_COMMANDS = {
     "<period>",
 }
 _WATCHLIST_CONTEXT_COMMANDS = {"add", "delete", "list"}
+_STOCK_CONTEXT_COMMANDS = {"fundmentals"}
 _CONFIG_CONTEXT_COMMANDS = {"?", "help", "token", "end"}
 
 
@@ -140,6 +143,7 @@ _OVERVIEW_LINES = (
     "  index | index list          Index board and symbol catalog",
     "  snap                        Active index/watchlist snapshot",
     "  chain <symbol|index> [qualifier]   F&O option chain",
+    "  fundmentals | funda          Active-stock fundamentals dashboard",
     "",
     "Charts + Tables:",
     "  chart swing ... | c ...     Swing chart",
@@ -188,6 +192,7 @@ _STAGE_HELP_LINES: dict[str, tuple[str, ...]] = {
     ),
     "stock": (
         "  quote | q                   Refresh the active quote",
+        "  fundmentals | funda         Show Upstox company fundamentals",
         "  chain | oc [qualifier]      Active stock option chain (if F&O)",
         "  c | cc | t | tt ...         Show charts or tables",
         "  <period>                    Show a swing chart",
@@ -471,6 +476,19 @@ def _command_entries(period_hint: str) -> dict[str, HelpEntry]:
             ("expiry: near", "strikes on each side of ATM: 10"),
             ("chain", "chain reliance next", "chain bank month strikes 15", "chain sensex"),
         ),
+        "fundmentals": HelpEntry(
+            "fundmentals",
+            ("funda",),
+            ("fundmentals",),
+            (
+                "Show consolidated fundamentals for the active listed stock using Upstox.",
+                "Includes ratios, quarterly sales/PAT, annual PAT/CFO, shareholding, and dividends.",
+                "PEG, book value/share, and trailing dividend yield are clearly marked as derived.",
+                "Available only from a stock prompt and accepts no qualifiers.",
+            ),
+            ("statement type: consolidated", "history: every period returned by Upstox"),
+            ("fundmentals", "funda"),
+        ),
         "config": HelpEntry(
             "config",
             usage=("config",),
@@ -651,6 +669,8 @@ def _command_available_at_stage(canonical: str, stage: str) -> bool:
         return canonical in _CONFIG_CONTEXT_COMMANDS
     if canonical in {"token", "end"}:
         return False
+    if canonical in _STOCK_CONTEXT_COMMANDS:
+        return stage == "stock"
     if canonical in _SYMBOL_CONTEXT_COMMANDS:
         return stage in {"stock", "index"}
     if canonical in _WATCHLIST_CONTEXT_COMMANDS:

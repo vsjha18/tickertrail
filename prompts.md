@@ -40,6 +40,7 @@ Core commands:
 - `token add upstox <token>` in configuration mode: save the token inline without an interactive secret prompt.
 - `show token` / `show token upstox` from normal prompts: report configured state and file path without displaying the token; do not make status available inside configuration mode.
 - `chain` / `oc` in a stock/index context: show its Upstox option chain when it has listed F&O contracts; elsewhere require `chain <symbol|index> ...`.
+- `fundmentals` / `funda` in a stock context: show the active listed company's consolidated Upstox fundamentals; accept no target or qualifier arguments and keep it unavailable at root, index, watchlist, and config prompts.
 - `Ctrl+C` while a command is running: cancel only the active command, reset transient progress output, and return to the REPL prompt.
 - `Ctrl+C` on an idle prompt: exit the REPL.
 - `news <code>`: resolve symbol and print latest Yahoo Finance headlines (best-effort availability per ticker/region).
@@ -128,6 +129,7 @@ Non-negotiable grammar:
 - `chain <symbol|index> expiry YYYY-MM-DD [strikes <1-25>]`
 - `chain [near|next|far|month] [strikes <1-25>]` (stock/index context)
 - `chain expiry YYYY-MM-DD [strikes <1-25>]` (stock/index context)
+- `fundmentals` / `funda` (stock context only; no qualifiers)
 
 Usability preference:
 - Prefer non-dash forms in docs/examples (`c nifty 3mo w`, `t nifty 2y mo`).
@@ -167,6 +169,7 @@ Design a small architecture for tickertrail with clear separation:
 - Keep quote/rebased/compare presentation logic in a reusable views module (for example `views.py`) and let `cli.py` call it as an adapter layer.
 - Keep grouped snapshot/day-range enrichment logic in a reusable service module (for example `snapshot_service.py`) with injected fetch/progress callbacks so index/snap features are reusable outside REPL.
 - Keep Upstox token persistence, exact stock/index instrument search, F&O contract validation, contract-calendar expiry resolution, HTTP normalization, option-chain parsing, and ATM-window selection in `upstox_service.py`; allow injected request callbacks so tests never use the live API.
+- Keep Upstox company-fundamentals fetching, normalization, derived metrics, and dashboard rendering in `fundamentals.py`; limit `cli.py` to stock-context dispatch and network telemetry.
 - Keep canonical index aliases, board membership, Yahoo fetch mappings, expected constituent counts, and prompt labels in `index_config.py`; `cli.py` may expose compatibility aliases but should not duplicate the configuration.
 
 3) Render layer
@@ -728,4 +731,47 @@ Rendering contract:
 Testing:
 - Mock every Upstox request; unit tests must make no live network calls.
 - Cover every qualifier, actual-contract expiry selection, exact-date and strike-count validation, request identity, token/gateway errors, response normalization, quote fallback, command routing/help, and ANSI rendering semantics.
+```
+
+## 20) Upstox Company Fundamentals Prompt
+```text
+Implement a read-only consolidated company-fundamentals dashboard backed only by Upstox.
+
+Grammar and context:
+- Canonical command: `fundmentals` (retain this exact accepted spelling).
+- Alias: `funda`.
+- Accept no target, statement-type, period, or other qualifiers.
+- Make both forms available only with an active listed stock at `tt>stock><symbol>>`.
+- Keep bare `?`, `fundmentals ?`, `funda ?`, and `help fundmentals` network-free and context-aware. Root, index, watchlist, and config situational help must not advertise the command as executable.
+- Default permanently to consolidated statements for this grammar.
+
+API and normalization:
+- Resolve the active stock exactly through Upstox instrument search and extract its ISIN; reject indices and non-equity instruments.
+- Fetch key ratios, quarterly income statement, yearly income statement with full statement, cash flow, shareholdings, corporate actions, and current LTP.
+- Use the API's operating cash-flow summary as CFO; do not label investing cash flow or another proxy as FCF.
+- Normalize ratio strings with or without `%`, malformed fields, missing histories, and absent sector values safely to `n/a`.
+- Treat LTP as optional: statement data must still render when price retrieval fails, while price-derived metrics become `n/a`.
+- Render every history period and dividend event returned by Upstox and print the actual counts. Do not promise 8–10 years; validation in August 2026 returned four quarters, four years, and four shareholding quarters for representative stocks.
+
+Metrics:
+- Direct: P/E, P/B, ROE, ROCE, latest annual CFO, quarterly sales/PAT, annual PAT/CFO, shareholding, and dividend events.
+- PEG*: P/E divided by the latest three-year diluted-EPS CAGR, requiring four positive EPS observations and positive growth; fall back to basic EPS only when diluted EPS is absent.
+- Book value/share*: current Upstox price divided by P/B.
+- Dividend yield TTM*: sum of returned dividends with ex-dates inside the trailing 365 days divided by current price.
+- Mark every derived metric with `*` and disclose each formula below the tables.
+- Allow sector-specific ratio omissions, especially ROCE for banks, without failing the dashboard.
+
+Rendering:
+- Heading: symbol/name, `FUNDAMENTALS`, consolidated basis, units, IST update time, and Upstox attribution.
+- Bold section/table headers.
+- Sections: `VALUATION & QUALITY`, `QUARTERLY PERFORMANCE`, `ANNUAL PROFIT & CASH FLOW`, `SHAREHOLDING`, and `DIVIDEND HISTORY`.
+- Quarterly rows: Sales, Sales QoQ, PAT, PAT QoQ.
+- Annual rows: PAT, PAT YoY, CFO, CFO YoY.
+- Color positive changes green, negative changes red, and zero neutral when ANSI output is available.
+- Monetary statement values are INR crore; per-share values use rupees.
+
+Architecture and tests:
+- Put data models, injected-request fetching, normalization, calculations, and rendering in `fundamentals.py`; do not expand `cli.py` with the dashboard implementation.
+- Track each real Upstox request in the standard per-command network footer.
+- Mock every network request in tests. Cover fixed request parameters, four-period normalization, derived formulas, sparse/malformed data, optional-price failure, company-only scope, rendering/color semantics, exact REPL routing, no-qualifier rejection, aliases, and situational help.
 ```

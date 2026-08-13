@@ -45,6 +45,7 @@ uv run tickertrail
 - Compare stocks vs benchmark (`cmp`, `t`, `tt`)
 - Open index boards and constituent snapshots (`index`, `snap`)
 - Inspect stock and index F&O chains with live Upstox prices and Greeks (`chain` / `oc`)
+- Review consolidated company fundamentals from Upstox (`fundmentals` / `funda`)
 - Build and manage persistent watchlists
 - Run analytics boards (`move`, `trend`, `relret`/`rr`, `corr`)
 
@@ -54,6 +55,7 @@ uv run tickertrail
 - `command_parser.py`: typed, network-free command grammar shared by CLI entry points
 - `repl_help.py`: data-driven REPL overview, topic, command, and alias help
 - `upstox_service.py`: Upstox token persistence, contract-calendar resolution, API normalization, and ATM-window selection
+- `fundamentals.py`: Upstox company-fundamentals normalization, derivations, and terminal dashboard rendering
 - `index_config.py`: canonical index aliases, board membership, fetch mappings, and prompt labels
 - `price_history.py` / `snapshot_service.py`: reusable market-data services with injected network callbacks
 - `views.py` / `quote_tools.py`: presentation and quote analytics
@@ -85,6 +87,7 @@ move 1mo
 trend
 relret 3mo
 corr 6mo
+funda
 ```
 
 ## Mode-Aware Behavior
@@ -98,6 +101,7 @@ Situational help follows a uniform rule at every prompt: bare `?` lists commands
 - Entered by typing a stock symbol (example: `infy`).
 - `quote`, `c`, `cc`, `t`, `tt` run on the active symbol.
 - `move`, `trend`, `relret` run on the active symbol.
+- `fundmentals` / `funda` shows the active listed company's consolidated Upstox fundamentals.
 - `corr` needs at least two symbols, so use `corr on <code1> <code2> ...`.
 
 ### 2) Index mode (`tt>index>bank>`)
@@ -384,6 +388,33 @@ Final           118.48      126.02      122.63
 - `index`: index board
 - `index list`: supported index catalog
 - `snap`: snapshot for active index/watchlist context
+
+## Stock Fundamentals (Upstox)
+
+Configure the Upstox analytics token once, then open a listed Indian stock:
+
+```text
+tt> config
+tt>config> token add upstox <token>
+tt>config> end
+tt> reliance
+tt>stock>reliance> fundmentals
+```
+
+`funda` is the only alias. The command is intentionally spelled `fundmentals`, accepts no qualifiers, and is available only from a stock prompt. `fundmentals ?` and `funda ?` show the same stock-specific, network-free help page.
+
+The consolidated dashboard contains:
+
+- P/E, P/B, ROE, ROCE, latest annual CFO, and Upstox sector benchmarks where applicable
+- derived PEG using P/E divided by three-year diluted-EPS CAGR
+- derived book value/share using current price divided by P/B
+- derived trailing-12-month dividend yield using cash dividends returned by Upstox
+- quarterly sales and PAT with QoQ changes
+- annual PAT and CFO with YoY changes
+- quarterly promoter, FII, mutual-fund, other-DII, and retail/other shareholding
+- dividend history with ex-date, type, and amount per share
+
+TickerTrail renders every period returned by Upstox and prints the actual history counts below the tables. As of the feature's validation, Upstox returned four quarters, four financial years, four shareholding quarters, and only the dividend events available in its response; the command does not claim an eight-to-ten-year Screener-style history. PEG remains `n/a` when four usable positive EPS observations do not produce positive growth. ROCE can be unavailable for financial companies because Upstox returns sector-specific bank ratios instead. The current-price request is optional: if it fails, direct statement data still renders while price-derived metrics show `n/a`.
 
 ## Stock and Index Option Chains (Upstox)
 

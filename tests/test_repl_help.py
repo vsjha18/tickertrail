@@ -28,6 +28,7 @@ class ReplHelpTests(unittest.TestCase):
             repl_help.print_help("oc", "Nd|Nmo(<12)|Ny")
             repl_help.print_help("token", "Nd|Nmo(<12)|Ny")
             repl_help.print_help("show", "Nd|Nmo(<12)|Ny")
+            repl_help.print_help("funda", "Nd|Nmo(<12)|Ny")
         text = out.getvalue()
         self.assertIn("Command: relret", text)
         self.assertIn("Command: quote", text)
@@ -37,6 +38,8 @@ class ReplHelpTests(unittest.TestCase):
         self.assertIn("Command: chain", text)
         self.assertIn("Command: token", text)
         self.assertIn("Command: show token", text)
+        self.assertIn("Command: fundmentals", text)
+        self.assertIn("Aliases: funda", text)
         self.assertIn("- none", text)
 
     def test_unknown_topic_reports_to_stderr(self):
@@ -73,6 +76,7 @@ class ReplHelpTests(unittest.TestCase):
 
         with patch("sys.stdout", new_callable=io.StringIO) as stock_out:
             repl_help.print_stage_help("stock", "stock: infy")
+        self.assertIn("fundmentals | funda", stock_out.getvalue())
         self.assertIn("chain | oc [qualifier]", stock_out.getvalue())
         self.assertIn("chain <symbol|index>", stock_out.getvalue())
         self.assertIn("show token [upstox]", stock_out.getvalue())
@@ -107,6 +111,8 @@ class ReplHelpTests(unittest.TestCase):
             repl_help.print_situational_help("token", "Nd|Nmo(<12)|Ny", "base")
             repl_help.print_situational_help("snap", "Nd|Nmo(<12)|Ny", "stock")
             repl_help.print_situational_help("mystery", "Nd|Nmo(<12)|Ny", "stock")
+            repl_help.print_situational_help("funda", "Nd|Nmo(<12)|Ny", "stock")
+            repl_help.print_situational_help("fundmentals", "Nd|Nmo(<12)|Ny", "index")
         text = out.getvalue()
         self.assertIn("Command: watchlist", text)
         self.assertIn("Command: watchlist create", text)
@@ -117,6 +123,8 @@ class ReplHelpTests(unittest.TestCase):
         self.assertIn("Command 'token' is not available at the base prompt", text)
         self.assertIn("Command 'snap' is not available at the stock prompt", text)
         self.assertIn("No command help matches 'mystery'", text)
+        self.assertIn("Command: fundmentals", text)
+        self.assertIn("not available at the index prompt", text)
 
 
 if __name__ == "__main__":
