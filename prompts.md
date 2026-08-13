@@ -37,7 +37,7 @@ Core commands:
 - `index list`: curated index universe (symbol catalog) without live fetch.
 - `config`: enter a single-level configuration mode; `end` or `exit` returns to `tt>`.
 - `token add upstox <token>` in configuration mode: save the token inline without an interactive secret prompt.
-- `token status upstox` in configuration mode: report configured state and file path without displaying the token.
+- `show token` / `show token upstox` from normal prompts: report configured state and file path without displaying the token; do not make status available inside configuration mode.
 - `chain` / `oc` in NIFTY context: show the Upstox NIFTY option chain; from other contexts require `chain nifty ...`.
 - `Ctrl+C` while a command is running: cancel only the active command, reset transient progress output, and return to the REPL prompt.
 - `Ctrl+C` on an idle prompt: exit the REPL.
@@ -121,7 +121,8 @@ Non-negotiable grammar:
 - `delete <symbol1> [symbolN ...]` (watchlist mode)
 - `list` (watchlist mode)
 - `config` (enter configuration mode)
-- `token add upstox <token>` / `token status upstox` / `end` (configuration mode)
+- `token add upstox <token>` / `end` (configuration mode)
+- `show token` / `show token upstox` (normal root, stock, index, or watchlist prompt)
 - `chain nifty [near|next|far|month] [strikes <1-25>]`
 - `chain nifty expiry YYYY-MM-DD [strikes <1-25>]`
 - `chain [near|next|far|month] [strikes <1-25>]` (NIFTY context)
@@ -692,7 +693,7 @@ Implement a read-only NIFTY option-chain workflow backed only by the Upstox APIs
 Configuration:
 - `config` enters `tt>config>` from the normal REPL.
 - Keep configuration mode flat: `token add upstox <token>` saves immediately; do not open another interactive token prompt.
-- `token status upstox` reports status and path but never echoes the token.
+- Keep token-status reads out of configuration mode. `show token` and `show token upstox` report status and path from a normal prompt but never echo the token.
 - `end` and `exit` return directly to `tt>`; `?`, `help`, and `help token` are situational and network-free.
 - Persist the stripped token atomically in repository-local `.upstox_analytics_token`, chmod `0600`, and list that file in `.gitignore`.
 

@@ -122,8 +122,8 @@ Many commands are context-sensitive. You usually do not need arguments.
 - Entered with `config` from the main prompt.
 - Type `?` for commands valid at this prompt or `help token` for token-command details.
 - `token add upstox <token>` immediately saves the inline analytics token.
-- `token status upstox` reports whether the token file is configured without printing its value.
 - `end` or `exit` returns directly to `tt>`.
+- From a normal prompt, `show token` or `show token upstox` reports configuration status without printing the token value.
 
 ### 5) Explicit override mode (`on ...`)
 
@@ -392,7 +392,9 @@ tt> config
 tt>config> token add upstox <token>
 Upstox analytics token saved to .../.upstox_analytics_token.
 tt>config> end
-tt>
+tt> show token
+Upstox analytics token: configured
+Token file: .../.upstox_analytics_token
 ```
 
 Then enter NIFTY context and request the chain:

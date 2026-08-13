@@ -15,6 +15,7 @@ class ReplHelpTests(unittest.TestCase):
         text = out.getvalue()
         self.assertIn("Tickertrail Help", text)
         self.assertIn("Core Commands:", text)
+        self.assertIn("show token [upstox]", text)
         self.assertIn("Watchlist Commands:", text)
 
     def test_command_alias_and_defaults_rendering(self):
@@ -26,6 +27,7 @@ class ReplHelpTests(unittest.TestCase):
             repl_help.print_help("delete all", "Nd|Nmo(<12)|Ny")
             repl_help.print_help("oc", "Nd|Nmo(<12)|Ny")
             repl_help.print_help("token", "Nd|Nmo(<12)|Ny")
+            repl_help.print_help("show", "Nd|Nmo(<12)|Ny")
         text = out.getvalue()
         self.assertIn("Command: relret", text)
         self.assertIn("Command: quote", text)
@@ -34,6 +36,7 @@ class ReplHelpTests(unittest.TestCase):
         self.assertIn("delete all", text)
         self.assertIn("Command: chain", text)
         self.assertIn("Command: token", text)
+        self.assertIn("Command: show token", text)
         self.assertIn("- none", text)
 
     def test_unknown_topic_reports_to_stderr(self):
@@ -64,11 +67,14 @@ class ReplHelpTests(unittest.TestCase):
         with patch("sys.stdout", new_callable=io.StringIO) as config_out:
             repl_help.print_stage_help("config", "config")
         self.assertIn("end | exit", config_out.getvalue())
+        self.assertNotIn("token status", config_out.getvalue())
+        self.assertNotIn("show token", config_out.getvalue())
         self.assertNotIn("cache | cache clear", config_out.getvalue())
 
         with patch("sys.stdout", new_callable=io.StringIO) as stock_out:
             repl_help.print_stage_help("stock", "stock: infy")
         self.assertIn("chain nifty [qualifier]", stock_out.getvalue())
+        self.assertIn("show token [upstox]", stock_out.getvalue())
 
 
 if __name__ == "__main__":

@@ -2429,14 +2429,15 @@ def _prompt_for_context(
 
 
 def _handle_config_token_command(cmd: str) -> None:
-    """Handle inline Upstox token add/status commands in configuration mode."""
+    """Handle inline Upstox token-add commands in configuration mode."""
     parts = cmd.split(maxsplit=3)
     lowered = [part.lower() for part in parts]
-    if lowered == ["token", "status", "upstox"]:
-        path = upstox_service.token_file_path()
-        state = "configured" if upstox_service.token_is_configured() else "not configured"
-        print(f"Upstox analytics token: {state}")
-        print(f"Token file: {path}")
+    if lowered[:2] == ["token", "status"]:
+        print(
+            "Token status is unavailable in config mode. Use `end`, then "
+            "`show token [upstox]`.",
+            file=sys.stderr,
+        )
         return
     if len(parts) != 4 or lowered[:3] != ["token", "add", "upstox"]:
         print("Incomplete command. Usage: token add upstox <token>", file=sys.stderr)
@@ -2447,6 +2448,14 @@ def _handle_config_token_command(cmd: str) -> None:
         print(str(exc), file=sys.stderr)
         return
     print(f"Upstox analytics token saved to {path}.")
+
+
+def _print_token_status() -> None:
+    """Show Upstox token configuration state without exposing its value."""
+    path = upstox_service.token_file_path()
+    state = "configured" if upstox_service.token_is_configured() else "not configured"
+    print(f"Upstox analytics token: {state}")
+    print(f"Token file: {path}")
 
 
 def _parse_nifty_chain_command(
@@ -3379,6 +3388,14 @@ def _run_repl(
                 continue
             if lower == "end":
                 print("`end` is available only in config mode.", file=sys.stderr)
+                continue
+            if lower == "show" or lower.startswith("show "):
+                # Operational status belongs to exec mode; keep provider grammar explicit.
+                show_parts = lower.split()
+                if show_parts not in (["show", "token"], ["show", "token", "upstox"]):
+                    print("Usage: show token [upstox]", file=sys.stderr)
+                    continue
+                _print_token_status()
                 continue
             if lower in {"quit", "exit"}:
                 _print_network_call_metrics()

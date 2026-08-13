@@ -3042,6 +3042,8 @@ class BranchRenderAndReplTests(unittest.TestCase):
             "help oc",
             "help config",
             "help token",
+            "help show",
+            "help show token",
             "help move",
             "help trend",
             "help relret",
@@ -3083,6 +3085,7 @@ class BranchRenderAndReplTests(unittest.TestCase):
         self.assertIn("Command: table intra", out_txt)
         self.assertIn("Command: chain", out_txt)
         self.assertIn("Command: token", out_txt)
+        self.assertIn("Command: show token", out_txt)
         self.assertIn("Command: watchlist merge", out_txt)
         self.assertIn("Command: <period>", out_txt)
         self.assertIn("Command: <symbol>", out_txt)

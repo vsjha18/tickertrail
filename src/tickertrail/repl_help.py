@@ -42,6 +42,8 @@ _COMMAND_ALIASES: dict[str, str] = {
     "oc": "chain",
     "config": "config",
     "token": "token",
+    "show": "show token",
+    "show token": "show token",
     "move": "move",
     "moves": "move",
     "trend": "trend",
@@ -101,6 +103,7 @@ _OVERVIEW_LINES = (
     "  cache                       Show today's persisted history cache summary",
     "  cache clear                 Clear today's persisted history cache",
     "  config                      Enter configuration mode",
+    "  show token [upstox]         Show token configuration status",
     "",
     "Analytics:",
     "  move [period]               Directional move-dot board (alias: moves)",
@@ -145,6 +148,7 @@ _OVERVIEW_LINES = (
     "  snap",
     "  config",
     "  token add upstox <token>",
+    "  show token",
     "  chain nifty next",
     "",
 )
@@ -192,7 +196,6 @@ _STAGE_HELP_LINES: dict[str, tuple[str, ...]] = {
     ),
     "config": (
         "  token add upstox <token>    Save the inline analytics token",
-        "  token status upstox         Show token-file status",
         "  end | exit                  Return directly to tt>",
     ),
 }
@@ -206,6 +209,7 @@ _STAGE_HELP_COMMON_LINES = (
     "  index | index list          Show indices",
     "  chain nifty [qualifier]     Show NIFTY option chain",
     "  config                      Enter configuration mode",
+    "  show token [upstox]         Show token configuration status",
     "  cache | cache clear         Inspect or clear history cache",
     "  cls | clear | !<shell-cmd>  Terminal utilities",
     "  quit | exit                 Exit TickerTrail",
@@ -215,7 +219,6 @@ _STAGE_HELP_COMMON_LINES = (
 _CONFIG_STAGE_HELP_COMMON_LINES = (
     "  ?                           Show this config-specific list",
     "  h | help [command]          Show config or command details",
-    "  end | exit                  Return directly to tt>",
 )
 
 
@@ -230,6 +233,7 @@ _TOPIC_SUMMARIES: dict[str, tuple[str, ...]] = {
         "  reload | r",
         "  !<shell-cmd>",
         "  cache | cache clear",
+        "  show token [upstox]",
         "  code <query>",
         "  news <code>",
         "  cmp <symbols...> [period [agg]]",
@@ -237,6 +241,7 @@ _TOPIC_SUMMARIES: dict[str, tuple[str, ...]] = {
         "",
         "Examples:",
         "  help relret",
+        "  show token",
         "  code national thermal",
         "  news infy",
         "  cmp nifty goldbees hdfcbank 1y w",
@@ -261,7 +266,6 @@ _TOPIC_SUMMARIES: dict[str, tuple[str, ...]] = {
         "",
         "Configuration Commands:",
         "  token add upstox <token>",
-        "  token status upstox",
         "  end | exit",
         "",
         "Examples:",
@@ -438,12 +442,23 @@ def _command_entries(period_hint: str) -> dict[str, HelpEntry]:
         ),
         "token": HelpEntry(
             "token",
-            usage=("token add upstox <token>", "token status upstox"),
+            usage=("token add upstox <token>",),
             details=(
                 "Save an inline Upstox analytics token to the ignored local token file.",
                 "Available only from tt>config>; use `end` to return to tt>.",
+                "Use `show token [upstox]` from tt> to view configuration status.",
             ),
-            examples=("token add upstox <token>", "token status upstox"),
+            examples=("token add upstox <token>",),
+        ),
+        "show token": HelpEntry(
+            "show token",
+            usage=("show token", "show token upstox"),
+            details=(
+                "Show whether the Upstox analytics token is configured and its file path.",
+                "Never prints the stored token value.",
+                "Available from normal stock, index, watchlist, and root prompts—not config mode.",
+            ),
+            examples=("show token", "show token upstox"),
         ),
         "move": HelpEntry(
             "move",

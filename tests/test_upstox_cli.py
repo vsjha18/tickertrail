@@ -34,8 +34,8 @@ def _chain_rows() -> list[service.OptionChainRow]:
 
 
 class UpstoxCliTests(unittest.TestCase):
-    def test_config_mode_adds_statuses_and_saves_inline_token(self):
-        """Route config help, token persistence, and `end` without extra modes."""
+    def test_config_adds_token_and_root_show_reports_status(self):
+        """Keep token writes in config mode and status reads in normal mode."""
         original_path = service.TOKEN_FILE
         try:
             with tempfile.TemporaryDirectory() as td:
@@ -49,6 +49,10 @@ class UpstoxCliTests(unittest.TestCase):
                     "token add upstox @#@#@#!",
                     "token status upstox",
                     "end",
+                    "show token",
+                    "show token upstox",
+                    "show token other",
+                    "show",
                     "end",
                     "exit",
                 ]
@@ -71,6 +75,8 @@ class UpstoxCliTests(unittest.TestCase):
                     7,
                 )
                 self.assertIn("Incomplete command", err.getvalue())
+                self.assertIn("unavailable in config mode", err.getvalue())
+                self.assertGreaterEqual(err.getvalue().count("Usage: show token [upstox]"), 2)
                 self.assertIn("available only in config mode", err.getvalue())
         finally:
             service.TOKEN_FILE = original_path
