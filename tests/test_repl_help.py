@@ -94,6 +94,30 @@ class ReplHelpTests(unittest.TestCase):
         self.assertIn("Name the target", root_text)
         self.assertNotIn("  chain next\n", root_text)
 
+    def test_trailing_question_help_resolves_prefixes_and_stage_availability(self):
+        """Resolve nested aliases and hide commands or forms unavailable at a stage."""
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            repl_help.print_situational_help("wl", "Nd|Nmo(<12)|Ny", "watchlist")
+            repl_help.print_situational_help(
+                "watchlist create swing", "Nd|Nmo(<12)|Ny", "watchlist"
+            )
+            repl_help.print_situational_help("tt", "Nd|Nmo(<12)|Ny", "watchlist")
+            repl_help.print_situational_help("move", "Nd|Nmo(<12)|Ny", "base")
+            repl_help.print_situational_help("exit", "Nd|Nmo(<12)|Ny", "config")
+            repl_help.print_situational_help("token", "Nd|Nmo(<12)|Ny", "base")
+            repl_help.print_situational_help("snap", "Nd|Nmo(<12)|Ny", "stock")
+            repl_help.print_situational_help("mystery", "Nd|Nmo(<12)|Ny", "stock")
+        text = out.getvalue()
+        self.assertIn("Command: watchlist", text)
+        self.assertIn("Command: watchlist create", text)
+        self.assertIn("Command 'tt' is not available at the watchlist prompt", text)
+        self.assertIn("move on <code1>", text)
+        self.assertNotIn("  move [Nd|Nmo(<12)|Ny]", text)
+        self.assertIn("Command: end", text)
+        self.assertIn("Command 'token' is not available at the base prompt", text)
+        self.assertIn("Command 'snap' is not available at the stock prompt", text)
+        self.assertIn("No command help matches 'mystery'", text)
+
 
 if __name__ == "__main__":
     unittest.main()

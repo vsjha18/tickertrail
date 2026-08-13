@@ -3453,6 +3453,16 @@ def _run_repl(
         try:
             lower = cmd.lower()
 
+            # Trailing `?` is grammar help at every command depth and must never reach execution.
+            if lower != "?" and cmd.endswith("?"):
+                prefix = cmd[:-1].strip()
+                repl_help.print_situational_help(
+                    prefix,
+                    _ANALYTICS_PERIOD_HINT,
+                    _help_stage_for_context(context),
+                )
+                continue
+
             # Configuration mode is intentionally flat: complete commands apply immediately.
             if context.config_mode:
                 if lower in {"end", "exit"}:
@@ -3470,9 +3480,6 @@ def _run_repl(
                     continue
                 if lower.startswith("help "):
                     repl_help.print_help(cmd.split(maxsplit=1)[1].strip(), _ANALYTICS_PERIOD_HINT)
-                    continue
-                if lower == "token ?":
-                    repl_help.print_help("token", _ANALYTICS_PERIOD_HINT)
                     continue
                 if lower == "token" or lower.startswith("token "):
                     _handle_config_token_command(cmd)
@@ -3700,13 +3707,6 @@ def _run_repl(
                     print("No active symbol. Enter an index symbol first.", file=sys.stderr)
                     continue
                 _print_index_constituent_snap(context.symbol)
-                continue
-            if lower in {"chain ?", "oc ?"}:
-                repl_help.print_help(
-                    "chain",
-                    _ANALYTICS_PERIOD_HINT,
-                    _help_stage_for_context(context),
-                )
                 continue
             if lower == "chain" or lower.startswith("chain ") or lower == "oc" or lower.startswith("oc "):
                 parts = cmd.split()

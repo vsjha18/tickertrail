@@ -2826,6 +2826,65 @@ class BranchRenderAndReplTests(unittest.TestCase):
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._print_quote", return_value=0)
+    @patch("tickertrail.cli._watchlist_symbols", return_value=["HDFCBANK.NS"])
+    def test_run_repl_trailing_question_help_never_executes_command(
+        self,
+        _mock_symbols,
+        _mock_quote,
+        _mock_hist,
+    ):
+        """Intercept watchlist and table help before lookup, parsing, or networking."""
+        commands = [
+            "watchlist open sharekhan",
+            "wl ?",
+            "tt ?",
+            "watchlist create demo ?",
+            "delete all ?",
+            "news infy ?",
+            "cache clear ?",
+            "!pwd ?",
+            "mystery ?",
+            "exit",
+        ]
+        with (
+            patch("builtins.input", side_effect=commands),
+            patch("tickertrail.cli._resolve_symbol_with_fallback") as mock_symbol,
+            patch("tickertrail.cli._resolve_benchmark_for_table") as mock_benchmark,
+            patch("tickertrail.cli._print_symbol_news") as mock_news,
+            patch("tickertrail.cli.price_history.clear_history_cache_today") as mock_cache_clear,
+            patch("tickertrail.cli.subprocess.run") as mock_subprocess,
+            patch("tickertrail.cli.yf.Ticker") as mock_ticker,
+            patch("tickertrail.cli.yf.download") as mock_download,
+            patch("sys.stdout", new_callable=io.StringIO) as out,
+        ):
+            rc = cli._run_repl(
+                "hdfcbank",
+                "HDFCBANK.NS",
+                {"regularMarketPrice": 720.0, "regularMarketPreviousClose": 715.0},
+                80,
+                20,
+            )
+        self.assertEqual(rc, 0)
+        text = out.getvalue()
+        self.assertIn("Command: watchlist", text)
+        self.assertIn("Command 'tt' is not available at the watchlist prompt", text)
+        self.assertIn("Command: watchlist create", text)
+        self.assertIn("Command: delete", text)
+        self.assertIn("Command: news", text)
+        self.assertIn("Command: cache clear", text)
+        self.assertIn("Command: !<shell-cmd>", text)
+        self.assertIn("No command help matches 'mystery'", text)
+        self.assertNotIn("Watchlist '?' not found", text)
+        mock_symbol.assert_not_called()
+        mock_benchmark.assert_not_called()
+        mock_news.assert_not_called()
+        mock_cache_clear.assert_not_called()
+        mock_subprocess.assert_not_called()
+        mock_ticker.assert_not_called()
+        mock_download.assert_not_called()
+
+    @patch("tickertrail.cli._enable_repl_history", return_value=None)
+    @patch("tickertrail.cli._print_quote", return_value=0)
     @patch("tickertrail.cli.repl_help.print_stage_help")
     @patch("tickertrail.cli._resolve_symbol_with_fallback")
     def test_run_repl_question_mark_tracks_base_stock_and_index_stages(

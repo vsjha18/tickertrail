@@ -25,7 +25,8 @@ Product contract:
 
 Core commands:
 - `h` / `help [topic|command]`: organized command reference with examples; topic shortcuts include `core`, `chart`, `table`, `watchlist`, `index`, and `help <command>` prints detailed usage/defaults/examples for that command.
-- `?`: print a concise, network-free command list for the active prompt stage (`tt`, stock, index, or watchlist); watchlist help includes the active watchlist name and only commands applicable from that context.
+- `?`: print a concise, network-free command list for the active prompt stage (`tt`, stock, index, watchlist, or config); watchlist help includes the active watchlist name and only commands applicable from that context.
+- `<command-prefix> ?`: intercept any trailing question mark before all execution/parsing paths, resolve complete or nested aliases by longest command prefix, and show grammar filtered to the active stage. An unavailable command reports its required context; an unknown prefix points to bare `?`. This path must make zero symbol, cache, subprocess, or provider calls.
 - `quote` / `q`: print quote for current symbol/index context (disallow in watchlist mode).
 - `quit` / `exit`: leave REPL.
 - `cls`/`clear`: clear terminal screen (must not trigger symbol resolution).
@@ -178,7 +179,7 @@ Design a small architecture for tickertrail with clear separation:
 - command dispatch
 - active symbol state
 - prompt string generation
-- Keep overview/topic/command help definitions in a data-driven `repl_help.py` module rather than nested in the REPL loop.
+- Keep overview/topic/command help definitions, prefix resolution, and stage-applicability policy in a data-driven `repl_help.py` module rather than nested in the REPL loop.
 - Keep `cli.py` focused on orchestration; do not reintroduce long presentation catalogs into `_run_repl()`.
 
 Output expected:
@@ -651,7 +652,7 @@ Keep it concise and factual.
 - Keep user-facing formats stable once accepted.
 - If behavior changes, update help and tests in same patch.
 - REPL should tolerate pasted prompt fragments like `tt>...> command` by extracting the trailing command token.
-- Dispatch `?` before symbol resolution so contextual help can never trigger a ticker lookup or network request.
+- Dispatch bare and trailing `?` before configuration, command, symbol, benchmark, cache, subprocess, or network handling so situational help can never execute the inspected prefix.
 - Keep REPL controller state explicit: active symbol/watchlist prompt context should move together, and last-view replay metadata should use typed state instead of ad-hoc string/dict pairs.
 - Grouped snapshot views (`index`, `snap`, watchlist snapshots, index fallback quote payloads) should use uncached batch minute-bar data only for currently open exchanges, then use session-keyed persisted daily-close snapshots for closed exchanges.
 - During grouped market-hours fetches, do not use cached data; fetch large universes in sequential batches of at most 20 symbols with download threading disabled, then retry missing symbols via later passes only after a short bounded backoff.

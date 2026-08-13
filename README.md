@@ -91,6 +91,8 @@ corr 6mo
 
 Many commands are context-sensitive. You usually do not need arguments.
 
+Situational help follows a uniform rule at every prompt: bare `?` lists commands that can run there, while a trailing question mark such as `wl ?`, `tt ?`, `chain next ?`, or `watchlist create ?` inspects that command stage without executing it. Help is intercepted before parsing, symbol resolution, cache access, or provider calls. Valid commands show only grammar usable in the current context; unavailable commands explain which context they require and point back to bare `?`.
+
 ### 1) Stock mode (`tt>stock>infy>`)
 
 - Entered by typing a stock symbol (example: `infy`).
@@ -113,7 +115,7 @@ Many commands are context-sensitive. You usually do not need arguments.
 ### 3) Watchlist mode (`tt>watchlist>sharekhan>`)
 
 - Entered with `watchlist open <name>`.
-- Type `?` to show the commands available from the current prompt; in this mode the list is limited to watchlist operations, applicable analytics, navigation, and general commands.
+- Type `?` to show the commands available from the current prompt; in this mode the list is limited to watchlist operations, applicable analytics, navigation, and general commands. For example, `wl ?` shows watchlist grammar, while `tt ?` explains that intraday tables require stock/index context without attempting to resolve `?` as a benchmark.
 - `move`, `trend`, `relret`, `corr` with no arguments run on symbols in that watchlist.
 - `snap` shows the current watchlist snapshot.
 

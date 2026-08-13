@@ -24,6 +24,7 @@ _COMMAND_ALIASES: dict[str, str] = {
     "quote": "quote",
     "quit": "quit",
     "exit": "quit",
+    "end": "end",
     "cls": "clear",
     "clear": "clear",
     "cache": "cache",
@@ -84,6 +85,25 @@ _COMMAND_ALIASES: dict[str, str] = {
 }
 
 
+_SYMBOL_CONTEXT_COMMANDS = {
+    "quote",
+    "reload",
+    "chart",
+    "chart swing",
+    "chart intra",
+    "c",
+    "cc",
+    "table",
+    "table swing",
+    "table intra",
+    "t",
+    "tt",
+    "<period>",
+}
+_WATCHLIST_CONTEXT_COMMANDS = {"add", "delete", "list"}
+_CONFIG_CONTEXT_COMMANDS = {"?", "help", "token", "end"}
+
+
 _OVERVIEW_LINES = (
     "",
     "Tickertrail Help",
@@ -93,6 +113,7 @@ _OVERVIEW_LINES = (
     "",
     "Core Commands:",
     "  ?                           Show commands for the current prompt",
+    "  <command> ?                 Show valid grammar here without executing",
     "  h | help [topic|command]    Show organized help",
     "  quote | q                   Show current symbol/index quote",
     "  news <code>                 Show recent Yahoo headlines",
@@ -204,6 +225,7 @@ _STAGE_HELP_LINES: dict[str, tuple[str, ...]] = {
 
 _STAGE_HELP_COMMON_LINES = (
     "  ?                           Show this prompt-specific list",
+    "  <command> ?                 Show command help valid at this prompt",
     "  h | help [topic|command]    Show full or detailed help",
     "  code <query> | news <code>  Find a ticker or show news",
     "  cmp <codes...> [period [agg]]",
@@ -219,6 +241,7 @@ _STAGE_HELP_COMMON_LINES = (
 
 _CONFIG_STAGE_HELP_COMMON_LINES = (
     "  ?                           Show this config-specific list",
+    "  <command> ?                 Show command help valid in config mode",
     "  h | help [command]          Show config or command details",
 )
 
@@ -336,9 +359,12 @@ def _command_entries(period_hint: str) -> dict[str, HelpEntry]:
     return {
         "?": HelpEntry(
             "?",
-            usage=("?",),
-            details=("Show only the commands relevant to the current prompt context.",),
-            examples=("?",),
+            usage=("?", "<command> ?"),
+            details=(
+                "Show only the commands relevant to the current prompt context.",
+                "A trailing question mark inspects grammar without executing the command.",
+            ),
+            examples=("?", "wl ?", "tt ?", "watchlist create ?"),
         ),
         "help": HelpEntry(
             "help",
@@ -363,6 +389,13 @@ def _command_entries(period_hint: str) -> dict[str, HelpEntry]:
             ("quote", "q"),
         ),
         "quit": HelpEntry("quit", ("exit",), ("quit", "exit"), ("Exit REPL immediately.",), examples=("quit",)),
+        "end": HelpEntry(
+            "end",
+            ("exit",),
+            ("end", "exit"),
+            ("Return directly from configuration mode to tt>.",),
+            examples=("end",),
+        ),
         "clear": HelpEntry("clear", ("cls",), ("clear",), ("Clear terminal screen and keep REPL session active.",), examples=("clear",)),
         "cache": HelpEntry(
             "cache",
@@ -610,6 +643,75 @@ def _chain_help_for_stage(entry: HelpEntry, stage: str | None) -> HelpEntry:
             ("chain reliance next", "chain bank month strikes 15", "chain sensex"),
         )
     return entry
+
+
+def _command_available_at_stage(canonical: str, stage: str) -> bool:
+    """Return whether one canonical command can execute at a prompt stage."""
+    if stage == "config":
+        return canonical in _CONFIG_CONTEXT_COMMANDS
+    if canonical in {"token", "end"}:
+        return False
+    if canonical in _SYMBOL_CONTEXT_COMMANDS:
+        return stage in {"stock", "index"}
+    if canonical in _WATCHLIST_CONTEXT_COMMANDS:
+        return stage == "watchlist"
+    if canonical == "snap":
+        return stage in {"index", "watchlist"}
+    return True
+
+
+def _canonical_command_prefix(prefix: str, stage: str) -> str | None:
+    """Resolve a complete or partially populated command prefix to its help key."""
+    normalized = " ".join(prefix.strip().lower().split())
+    if stage == "config" and normalized.split(maxsplit=1)[0] in {"end", "exit"}:
+        return "end"
+    exact = _COMMAND_ALIASES.get(normalized)
+    if exact is not None:
+        return exact
+    if normalized.startswith("!"):
+        return "shell"
+
+    # Longest-prefix matching supports forms such as `watchlist create swing ?`.
+    candidates = [
+        (len(alias), canonical)
+        for alias, canonical in _COMMAND_ALIASES.items()
+        if not alias.startswith("<") and normalized.startswith(f"{alias} ")
+    ]
+    return max(candidates, default=(0, None), key=lambda item: item[0])[1]
+
+
+def _help_entry_for_stage(entry: HelpEntry, canonical: str, stage: str) -> HelpEntry:
+    """Filter one command help page to syntax executable at the current stage."""
+    if canonical == "chain":
+        return _chain_help_for_stage(entry, stage)
+    if stage == "base" and canonical in {"move", "trend", "relret", "corr"}:
+        explicit_usage = tuple(line for line in entry.usage if " on " in f" {line} ")
+        return HelpEntry(
+            entry.command,
+            entry.aliases,
+            explicit_usage,
+            ("An explicit symbol list is required because no market context is active.", *entry.details),
+            entry.defaults,
+            tuple(example for example in entry.examples if " on " in f" {example} "),
+        )
+    return entry
+
+
+def print_situational_help(prefix: str, period_hint: str, stage: str) -> None:
+    """Render trailing-question-mark help without executing the command prefix."""
+    normalized_stage = stage.strip().lower() or "base"
+    canonical = _canonical_command_prefix(prefix, normalized_stage)
+    if canonical is None:
+        print(f"No command help matches '{prefix}' here. Type ? for commands available here.")
+        return
+    if not _command_available_at_stage(canonical, normalized_stage):
+        print(
+            f"Command '{prefix}' is not available at the {normalized_stage} prompt. "
+            "Type ? for commands available here."
+        )
+        return
+    entry = _command_entries(period_hint)[canonical]
+    _print_command_help(_help_entry_for_stage(entry, canonical, normalized_stage))
 
 
 def print_stage_help(stage: str, label: str | None = None) -> None:
