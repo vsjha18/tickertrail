@@ -11,6 +11,7 @@ __pycache__/
 .tracecov/
 .coverage
 .tickertrail_history
+.upstox_analytics_token
 
 # Virtual environment
 .venv/

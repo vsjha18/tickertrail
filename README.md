@@ -44,6 +44,7 @@ uv run tickertrail
 - View swing and intraday charts in terminal
 - Compare stocks vs benchmark (`cmp`, `t`, `tt`)
 - Open index boards and constituent snapshots (`index`, `snap`)
+- Inspect a NIFTY option chain with live Upstox prices and Greeks (`chain` / `oc`)
 - Build and manage persistent watchlists
 - Run analytics boards (`move`, `trend`, `relret`/`rr`, `corr`)
 
@@ -52,6 +53,7 @@ uv run tickertrail
 - `cli.py`: entry point, compatibility adapters, and REPL controller orchestration
 - `command_parser.py`: typed, network-free command grammar shared by CLI entry points
 - `repl_help.py`: data-driven REPL overview, topic, command, and alias help
+- `upstox_service.py`: Upstox token persistence, option-chain grammar, API normalization, and ATM-window selection
 - `index_config.py`: canonical index aliases, board membership, fetch mappings, and prompt labels
 - `price_history.py` / `snapshot_service.py`: reusable market-data services with injected network callbacks
 - `views.py` / `quote_tools.py`: presentation and quote analytics
@@ -106,6 +108,7 @@ Many commands are context-sensitive. You usually do not need arguments.
   - `trend` runs over index constituents when available.
   - `relret` runs over index constituents with an index-appropriate benchmark.
   - `corr` runs over index constituents and needs at least two valid overlapping series.
+- In NIFTY mode, `chain` / `oc` shows the selected NIFTY option expiry.
 
 ### 3) Watchlist mode (`tt>watchlist>sharekhan>`)
 
@@ -114,7 +117,15 @@ Many commands are context-sensitive. You usually do not need arguments.
 - `move`, `trend`, `relret`, `corr` with no arguments run on symbols in that watchlist.
 - `snap` shows the current watchlist snapshot.
 
-### 4) Explicit override mode (`on ...`)
+### 4) Configuration mode (`tt>config>`)
+
+- Entered with `config` from the main prompt.
+- Type `?` for commands valid at this prompt or `help token` for token-command details.
+- `token add upstox <token>` immediately saves the inline analytics token.
+- `token status upstox` reports whether the token file is configured without printing its value.
+- `end` or `exit` returns directly to `tt>`.
+
+### 5) Explicit override mode (`on ...`)
 
 - Works from any context.
 - `move on <codes...> [period]`
@@ -372,6 +383,43 @@ Final           118.48      126.02      122.63
 - `index list`: supported index catalog
 - `snap`: snapshot for active index/watchlist context
 
+## NIFTY Option Chain (Upstox)
+
+Configure the Upstox analytics token once from the REPL:
+
+```text
+tt> config
+tt>config> token add upstox <token>
+Upstox analytics token saved to .../.upstox_analytics_token.
+tt>config> end
+tt>
+```
+
+Then enter NIFTY context and request the chain:
+
+```text
+tt> nifty
+tt>index>nifty> chain
+tt>index>nifty> chain next
+tt>index>nifty> chain far strikes 15
+tt>index>nifty> chain month
+tt>index>nifty> chain expiry 2026-08-27 strikes 10
+```
+
+From any non-NIFTY prompt, use the explicit form `chain nifty ...`. `oc` is an alias for `chain`.
+
+Expiry qualifiers:
+
+- `near`: immediate weekly expiry and the default
+- `next`: following weekly expiry
+- `far`: weekly expiry after `next`
+- `month`: current monthly expiry
+- `expiry YYYY-MM-DD`: exact expiry date
+
+The optional `strikes <1-25>` modifier controls how many strikes are shown on each side of ATM; the default is 10. The chain is ordered from higher strikes at the top to lower strikes at the bottom. Calls are on the left, puts on the right, and the strike spine is centered and bold. Headers and the complete ATM row are bold. Each call/put half is independently colored by its daily move, and LTP shows that move in brackets. Delta sits immediately next to LTP, followed by Vega, Gamma, Theta, IV, volume, and OI. The heading shows the current NIFTY value and its absolute and percentage move.
+
+Use `chain ?`, `oc ?`, or `help chain` for situational help. Upstox access is read-only in this feature; an expired or rejected token produces a configuration error instead of falling back to another data source.
+
 ## Charts and Tables
 
 - Swing chart: `c [<benchmark>] [<period>]`
@@ -449,6 +497,7 @@ t nifty 6mo w
 - Local symbol universe file: `data/nse_equity_list.csv`
 - Index constituent mapping: `data/index_constituents.csv`
 - Local history cache: `.cache/history/`
+- Upstox analytics token: `.upstox_analytics_token` (repository-local, mode `0600`, and ignored by Git)
 
 ## Notes
 

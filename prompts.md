@@ -19,8 +19,9 @@ Product contract:
   - stock context: `tt>stock><symbol_token>> `
   - index context: `tt>index><index_token>> `
   - watchlist context: `tt>watchlist><name>> `
-  - examples: `tt>stock>infy> `, `tt>index>bank> `, `tt>watchlist>sharekhan> `
-- Date format in user output: `dd-mm-yy`.
+  - configuration context: `tt>config> `
+  - examples: `tt>stock>infy> `, `tt>index>bank> `, `tt>watchlist>sharekhan> `, `tt>config> `
+- Date format in general user output: `dd-mm-yy`; option expiry headings use `dd-Mon-yyyy`.
 
 Core commands:
 - `h` / `help [topic|command]`: organized command reference with examples; topic shortcuts include `core`, `chart`, `table`, `watchlist`, `index`, and `help <command>` prints detailed usage/defaults/examples for that command.
@@ -34,6 +35,10 @@ Core commands:
 - `reload` / `r`: refresh active quote and replay last chart/table view.
 - `index`: live market board with India + Global sections.
 - `index list`: curated index universe (symbol catalog) without live fetch.
+- `config`: enter a single-level configuration mode; `end` or `exit` returns to `tt>`.
+- `token add upstox <token>` in configuration mode: save the token inline without an interactive secret prompt.
+- `token status upstox` in configuration mode: report configured state and file path without displaying the token.
+- `chain` / `oc` in NIFTY context: show the Upstox NIFTY option chain; from other contexts require `chain nifty ...`.
 - `Ctrl+C` while a command is running: cancel only the active command, reset transient progress output, and return to the REPL prompt.
 - `Ctrl+C` on an idle prompt: exit the REPL.
 - `news <code>`: resolve symbol and print latest Yahoo Finance headlines (best-effort availability per ticker/region).
@@ -115,6 +120,12 @@ Non-negotiable grammar:
 - `add <symbol1> [symbolN ...]` (watchlist mode)
 - `delete <symbol1> [symbolN ...]` (watchlist mode)
 - `list` (watchlist mode)
+- `config` (enter configuration mode)
+- `token add upstox <token>` / `token status upstox` / `end` (configuration mode)
+- `chain nifty [near|next|far|month] [strikes <1-25>]`
+- `chain nifty expiry YYYY-MM-DD [strikes <1-25>]`
+- `chain [near|next|far|month] [strikes <1-25>]` (NIFTY context)
+- `chain expiry YYYY-MM-DD [strikes <1-25>]` (NIFTY context)
 
 Usability preference:
 - Prefer non-dash forms in docs/examples (`c nifty 3mo w`, `t nifty 2y mo`).
@@ -129,6 +140,7 @@ Token conventions:
 
 Persistence conventions:
 - Store watchlist data in `data/db.json`.
+- Store the Upstox analytics token in repository-local `.upstox_analytics_token`, mode `0600`, and ignore it in Git.
 - JSON shape:
   - top-level object with `watchlists` map
   - watchlist names as keys and de-duplicated symbol arrays as values
@@ -152,6 +164,7 @@ Design a small architecture for tickertrail with clear separation:
 - Keep historical close-series retrieval in a reusable module (for example `price_history.py`) with injected downloader/telemetry callbacks so non-CLI workflows can reuse it and tests can stub network cleanly.
 - Keep quote/rebased/compare presentation logic in a reusable views module (for example `views.py`) and let `cli.py` call it as an adapter layer.
 - Keep grouped snapshot/day-range enrichment logic in a reusable service module (for example `snapshot_service.py`) with injected fetch/progress callbacks so index/snap features are reusable outside REPL.
+- Keep Upstox token persistence, HTTP normalization, option-chain parsing, and ATM-window selection in `upstox_service.py`; allow injected request callbacks so tests never use the live API.
 - Keep canonical index aliases, board membership, Yahoo fetch mappings, expected constituent counts, and prompt labels in `index_config.py`; `cli.py` may expose compatibility aliases but should not duplicate the configuration.
 
 3) Render layer
@@ -186,12 +199,15 @@ Create minimal file layout:
 - src/tickertrail/quote_tools.py
 - src/tickertrail/snapshot_service.py
 - src/tickertrail/timeframe.py
+- src/tickertrail/upstox_service.py
 - src/tickertrail/views.py
 - tests/test_cli_parsing.py
 - tests/test_cli_commands.py
 - tests/test_cli_branches.py
 - tests/test_command_parser.py
 - tests/test_repl_help.py
+- tests/test_upstox_cli.py
+- tests/test_upstox_service.py
 
 Conventions:
 - docstrings on every function (including nested local helpers).
@@ -668,3 +684,42 @@ Keep it concise and factual.
   - textual `regularMarketDayRange` or `dayRange` formatted as `low - high`
 - Continue using three batch download passes first; use quote fallback only for unresolved or range-enrichment cases.
 - If all supported quote/range fields are absent, render `Range` as `n/a` instead of synthesizing fake bounds.
+
+## 19) Upstox NIFTY Option-Chain Prompt
+```text
+Implement a read-only NIFTY option-chain workflow backed only by the Upstox APIs.
+
+Configuration:
+- `config` enters `tt>config>` from the normal REPL.
+- Keep configuration mode flat: `token add upstox <token>` saves immediately; do not open another interactive token prompt.
+- `token status upstox` reports status and path but never echoes the token.
+- `end` and `exit` return directly to `tt>`; `?`, `help`, and `help token` are situational and network-free.
+- Persist the stripped token atomically in repository-local `.upstox_analytics_token`, chmod `0600`, and list that file in `.gitignore`.
+
+Chain grammar:
+- NIFTY context: `chain|oc [near|next|far|month] [strikes <1-25>]`.
+- NIFTY context exact date: `chain|oc expiry YYYY-MM-DD [strikes <1-25>]`.
+- Other contexts: require `chain|oc nifty ...` so intent is explicit.
+- Defaults: `near`, 10 strikes below and 10 strikes above ATM.
+- Relative Upstox expiry mapping: `near=current_week`, `next=next_week`, `far=far_week`, `month=current_month`.
+
+API/data boundaries:
+- Fetch the chain from `/v2/option/chain` using `NSE_INDEX|Nifty 50` and the selected expiry value.
+- Fetch NIFTY LTP/previous close from `/v3/market-quote/ltp`; if this header quote fails but the chain has an underlying spot, render using that spot.
+- Never silently switch the chain to Yahoo or another provider.
+- Normalize malformed/missing scalar fields to `n/a` and return concise safe errors for network, token, and response failures.
+
+Rendering contract:
+- Top line: NIFTY value plus signed absolute and percentage daily move.
+- Calls on the left, strike spine in the center, puts on the right.
+- Always sort the strike spine descending so higher strikes are at the top.
+- Make both header rows bold, every strike-spine cell bold, and the complete ATM row bold.
+- Color each call and put half independently green/red based on LTP versus previous close; use neutral gray when change cannot be calculated.
+- Show LTP as `<price> (<signed-percent>%)`; put Delta immediately beside LTP.
+- Also show Vega, Gamma, Theta, IV, volume, and OI.
+- Select the nearest available strike as ATM; on an exact-distance tie choose the lower strike.
+
+Testing:
+- Mock every Upstox request; unit tests must make no live network calls.
+- Cover every qualifier, exact-date and strike-count validation, token persistence/errors, response normalization, quote fallback, command routing/help, and ANSI rendering semantics.
+```

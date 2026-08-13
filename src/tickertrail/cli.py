@@ -33,6 +33,7 @@ from . import quote_tools
 from . import repl_help
 from . import snapshot_service
 from . import timeframe
+from . import upstox_service
 from . import views
 
 _PERIODS = ("1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max")
@@ -117,6 +118,7 @@ class _ReplContext:
     info: dict[str, Any] | None
     prompt_label: str | None
     watchlist_name: str | None = None
+    config_mode: bool = False
 
 
 class _BatchLivePrices(dict[str, float]):
@@ -606,17 +608,22 @@ def _supports_color() -> bool:
 
 def _colorize(text: str, color: str) -> str:
     """Wrap text in ANSI color codes when terminal coloring is enabled."""
+    return _style_text(text, color=color)
+
+
+def _style_text(text: str, color: str | None = None, bold: bool = False) -> str:
+    """Apply optional ANSI colour and bold styling to terminal text."""
     if not _supports_color():
         return text
     codes = {
-        "red": "\033[31m",
-        "green": "\033[32m",
-        "yellow": "\033[33m",
-        "cyan": "\033[36m",
-        "gray": "\033[90m",
+        "red": "31",
+        "green": "32",
+        "yellow": "33",
+        "cyan": "36",
+        "gray": "90",
     }
-    reset = "\033[0m"
-    return f"{codes.get(color, '')}{text}{reset}" if color in codes else text
+    style_codes = (["1"] if bold else []) + ([codes[color]] if color in codes else [])
+    return f"\033[{';'.join(style_codes)}m{text}\033[0m" if style_codes else text
 
 
 def _color_by_sign(value: float, plus_is_green: bool = True) -> str:
@@ -2406,12 +2413,215 @@ def _prompt_for_symbol(symbol: str | None, prompt_label: str | None = None) -> s
     return f"tt>{scope}>{label}> "
 
 
-def _prompt_for_context(symbol: str | None, watchlist_name: str | None, prompt_label: str | None = None) -> str:
-    """Build REPL prompt from active watchlist context or active stock/index symbol."""
+def _prompt_for_context(
+    symbol: str | None,
+    watchlist_name: str | None,
+    prompt_label: str | None = None,
+    config_mode: bool = False,
+) -> str:
+    """Build the REPL prompt from config, watchlist, stock, or index context."""
+    if config_mode:
+        return "tt>config> "
     if watchlist_name:
         label = _normalize_prompt_label(watchlist_name) or watchlist_name.strip().lower()
         return f"tt>watchlist>{label}> "
     return _prompt_for_symbol(symbol, prompt_label=prompt_label)
+
+
+def _handle_config_token_command(cmd: str) -> None:
+    """Handle inline Upstox token add/status commands in configuration mode."""
+    parts = cmd.split(maxsplit=3)
+    lowered = [part.lower() for part in parts]
+    if lowered == ["token", "status", "upstox"]:
+        path = upstox_service.token_file_path()
+        state = "configured" if upstox_service.token_is_configured() else "not configured"
+        print(f"Upstox analytics token: {state}")
+        print(f"Token file: {path}")
+        return
+    if len(parts) != 4 or lowered[:3] != ["token", "add", "upstox"]:
+        print("Incomplete command. Usage: token add upstox <token>", file=sys.stderr)
+        return
+    try:
+        path = upstox_service.save_analytics_token(parts[3])
+    except upstox_service.UpstoxError as exc:
+        print(str(exc), file=sys.stderr)
+        return
+    print(f"Upstox analytics token saved to {path}.")
+
+
+def _parse_nifty_chain_command(
+    args: list[str],
+    current_symbol: str | None,
+) -> tuple[upstox_service.ChainRequest | None, str | None]:
+    """Resolve NIFTY context and parse one option-chain command tail."""
+    tokens = list(args)
+    if tokens and tokens[0].lower() == "nifty":
+        tokens.pop(0)
+    elif _normalize_snap_index_symbol(current_symbol or "") != "^NSEI":
+        return None, "`chain` currently supports NIFTY only. Enter `nifty` or use `chain nifty`."
+    return upstox_service.parse_chain_args(tokens)
+
+
+def _format_chain_scalar(value: float | None, precision: int) -> str:
+    """Format one option-chain numeric value with fixed precision."""
+    return "n/a" if value is None else f"{value:.{precision}f}"
+
+
+def _format_chain_expiry_label(value: str) -> str:
+    """Format an ISO option expiry for the table heading when possible."""
+    try:
+        return dt.date.fromisoformat(value).strftime("%d-%b-%Y")
+    except ValueError:
+        return value
+
+
+def _option_change_pct(side: upstox_service.OptionSide) -> float | None:
+    """Calculate one option contract's move from its previous close."""
+    if side.ltp is None or side.close_price in {None, 0.0}:
+        return None
+    return ((side.ltp - side.close_price) / side.close_price) * 100
+
+
+def _format_option_ltp(side: upstox_service.OptionSide) -> str:
+    """Format option LTP with its signed daily percentage in brackets."""
+    if side.ltp is None:
+        return "n/a"
+    pct = _option_change_pct(side)
+    return f"{side.ltp:,.2f} (n/a)" if pct is None else f"{side.ltp:,.2f} ({pct:+.2f}%)"
+
+
+def _option_side_color(side: upstox_service.OptionSide) -> str:
+    """Return semantic row colour from one option's daily LTP movement."""
+    pct = _option_change_pct(side)
+    return "gray" if pct is None else _color_by_sign(pct)
+
+
+def _format_call_chain_cells(side: upstox_service.OptionSide) -> str:
+    """Format call columns with Delta immediately beside LTP."""
+    return " ".join(
+        (
+            f"{_fmt_compact_num(side.oi):>7}",
+            f"{_fmt_compact_num(side.volume):>7}",
+            f"{_format_chain_scalar(side.iv, 2):>6}",
+            f"{_format_chain_scalar(side.theta, 2):>8}",
+            f"{_format_chain_scalar(side.gamma, 4):>8}",
+            f"{_format_chain_scalar(side.vega, 2):>7}",
+            f"{_format_chain_scalar(side.delta, 3):>7}",
+            f"{_format_option_ltp(side):>19}",
+        )
+    )
+
+
+def _format_put_chain_cells(side: upstox_service.OptionSide) -> str:
+    """Format put columns with Delta immediately beside LTP."""
+    return " ".join(
+        (
+            f"{_format_option_ltp(side):<19}",
+            f"{_format_chain_scalar(side.delta, 3):>7}",
+            f"{_format_chain_scalar(side.vega, 2):>7}",
+            f"{_format_chain_scalar(side.gamma, 4):>8}",
+            f"{_format_chain_scalar(side.theta, 2):>8}",
+            f"{_format_chain_scalar(side.iv, 2):>6}",
+            f"{_fmt_compact_num(side.volume):>7}",
+            f"{_fmt_compact_num(side.oi):>7}",
+        )
+    )
+
+
+def _render_nifty_option_chain(
+    request: upstox_service.ChainRequest,
+    rows: list[upstox_service.OptionChainRow],
+    quote: upstox_service.NiftyQuote | None,
+) -> None:
+    """Render a descending NIFTY option-chain table with coloured Greeks."""
+    chain_spot = next((row.spot for row in rows if row.spot is not None), None)
+    current_value = quote.last_price if quote is not None and quote.last_price is not None else chain_spot
+    if current_value is None:
+        raise upstox_service.UpstoxError("Upstox returned no current NIFTY value.")
+    selected, atm_strike = upstox_service.window_around_atm(rows, current_value, request.strikes_each_side)
+    expiry = _format_chain_expiry_label(
+        next((row.expiry for row in selected if row.expiry != "n/a"), "n/a")
+    )
+
+    # The quote endpoint supplies the previous close; the chain spot remains a display fallback.
+    previous_close = quote.close_price if quote is not None else None
+    change = None if previous_close in {None, 0.0} else current_value - previous_close
+    pct = None if change is None else (change / previous_close) * 100
+    if change is None or pct is None:
+        nifty_move = "n/a"
+        nifty_color = "gray"
+        arrow = ""
+    else:
+        nifty_move = f"{change:+,.2f} ({pct:+.2f}%)"
+        nifty_color = _color_by_sign(change)
+        arrow = " ↑" if change > 0 else " ↓" if change < 0 else ""
+
+    print()
+    print(
+        f"{_style_text('NIFTY 50', bold=True)}  "
+        f"{_style_text(f'{current_value:,.2f}  {nifty_move}{arrow}', color=nifty_color, bold=True)}"
+    )
+    print(
+        _style_text(
+            f"OPTION CHAIN · {request.qualifier.upper()} · Expiry {expiry}",
+            bold=True,
+        )
+    )
+    updated = dt.datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%m-%Y %H:%M:%S IST")
+    print(
+        f"ATM {atm_strike:,.0f} · {request.strikes_each_side} strikes below/above · "
+        f"Updated {updated} · Upstox"
+    )
+
+    left_header = (
+        f"{'OI':>7} {'Vol':>7} {'IV%':>6} {'Theta':>8} {'Gamma':>8} "
+        f"{'Vega':>7} {'Delta':>7} {'LTP (Today)':>19}"
+    )
+    strike_header = f"{'Strike':^14}"
+    right_header = (
+        f"{'LTP (Today)':<19} {'Delta':>7} {'Vega':>7} {'Gamma':>8} "
+        f"{'Theta':>8} {'IV%':>6} {'Vol':>7} {'OI':>7}"
+    )
+    print(_style_text(f"{'CALLS':^{len(left_header)}} │ {'STRIKES':^14} │ {'PUTS':^{len(right_header)}}", bold=True))
+    print(_style_text(f"{left_header} │ {strike_header} │ {right_header}", bold=True))
+    print(f"{'─' * len(left_header)}─┼─{'─' * len(strike_header)}─┼─{'─' * len(right_header)}")
+
+    # Descending rows keep higher strikes at the top; each option half has its own move colour.
+    for row in selected:
+        is_atm = row.strike == atm_strike
+        left = _style_text(
+            _format_call_chain_cells(row.call),
+            color=_option_side_color(row.call),
+            bold=is_atm,
+        )
+        strike_label = f"{row.strike:,.0f}{' ATM' if is_atm else ''}"
+        spine = _style_text(f"{strike_label:^14}", bold=True)
+        right = _style_text(
+            _format_put_chain_cells(row.put),
+            color=_option_side_color(row.put),
+            bold=is_atm,
+        )
+        print(f"{left} │ {spine} │ {right}")
+
+
+def _print_nifty_option_chain(request: upstox_service.ChainRequest) -> int:
+    """Load the Upstox token, fetch NIFTY data, and render the option chain."""
+    try:
+        token = upstox_service.load_analytics_token()
+        quote: upstox_service.NiftyQuote | None = None
+        try:
+            _track_network_call("upstox.ltp")
+            quote = upstox_service.fetch_nifty_quote(token)
+        except upstox_service.UpstoxError:
+            # A missing quote must not hide a usable chain; its embedded spot is the fallback.
+            quote = None
+        _track_network_call("upstox.option_chain")
+        rows = upstox_service.fetch_option_chain(token, request.expiry_value)
+        _render_nifty_option_chain(request, rows, quote)
+    except upstox_service.UpstoxError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+    return 0
 
 
 def _print_watchlist_snapshot(watchlist_name: str) -> int:
@@ -3108,7 +3318,14 @@ def _run_repl(
             _print_network_call_metrics()
             report_pending = False
         try:
-            raw = input(_prompt_for_context(context.symbol, context.watchlist_name, context.prompt_label))
+            raw = input(
+                _prompt_for_context(
+                    context.symbol,
+                    context.watchlist_name,
+                    context.prompt_label,
+                    config_mode=context.config_mode,
+                )
+            )
         except EOFError:
             print()
             return 0
@@ -3126,6 +3343,43 @@ def _run_repl(
         report_pending = True
         try:
             lower = cmd.lower()
+
+            # Configuration mode is intentionally flat: complete commands apply immediately.
+            if context.config_mode:
+                if lower in {"end", "exit"}:
+                    context.config_mode = False
+                    context.symbol = None
+                    context.info = None
+                    context.prompt_label = None
+                    context.watchlist_name = None
+                    continue
+                if lower == "?":
+                    repl_help.print_stage_help("config", "config")
+                    continue
+                if lower in {"h", "help"}:
+                    repl_help.print_help("config", _ANALYTICS_PERIOD_HINT)
+                    continue
+                if lower.startswith("help "):
+                    repl_help.print_help(cmd.split(maxsplit=1)[1].strip(), _ANALYTICS_PERIOD_HINT)
+                    continue
+                if lower == "token ?":
+                    repl_help.print_help("token", _ANALYTICS_PERIOD_HINT)
+                    continue
+                if lower == "token" or lower.startswith("token "):
+                    _handle_config_token_command(cmd)
+                    continue
+                print(f"Unknown config command '{cmd}'. Type ? for commands available here.", file=sys.stderr)
+                continue
+
+            if lower == "config":
+                context.config_mode = True
+                continue
+            if lower.startswith("config "):
+                print("Usage: config", file=sys.stderr)
+                continue
+            if lower == "end":
+                print("`end` is available only in config mode.", file=sys.stderr)
+                continue
             if lower in {"quit", "exit"}:
                 _print_network_call_metrics()
                 return 0
@@ -3328,6 +3582,18 @@ def _run_repl(
                     print("No active symbol. Enter an index symbol first.", file=sys.stderr)
                     continue
                 _print_index_constituent_snap(context.symbol)
+                continue
+            if lower in {"chain ?", "oc ?"}:
+                repl_help.print_help("chain", _ANALYTICS_PERIOD_HINT)
+                continue
+            if lower == "chain" or lower.startswith("chain ") or lower == "oc" or lower.startswith("oc "):
+                parts = cmd.split()
+                chain_request, parse_error = _parse_nifty_chain_command(parts[1:], context.symbol)
+                if parse_error:
+                    print(parse_error, file=sys.stderr)
+                    continue
+                assert chain_request is not None
+                _print_nifty_option_chain(chain_request)
                 continue
             if lower == "move" or lower.startswith("move ") or lower == "moves" or lower.startswith("moves "):
                 parts = cmd.split()

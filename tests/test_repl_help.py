@@ -24,12 +24,16 @@ class ReplHelpTests(unittest.TestCase):
             repl_help.print_help("q", "Nd|Nmo(<12)|Ny")
             repl_help.print_help("cache clear", "Nd|Nmo(<12)|Ny")
             repl_help.print_help("delete all", "Nd|Nmo(<12)|Ny")
+            repl_help.print_help("oc", "Nd|Nmo(<12)|Ny")
+            repl_help.print_help("token", "Nd|Nmo(<12)|Ny")
         text = out.getvalue()
         self.assertIn("Command: relret", text)
         self.assertIn("Command: quote", text)
         self.assertIn("symbol: current active symbol", text)
         self.assertIn("Command: cache clear", text)
         self.assertIn("delete all", text)
+        self.assertIn("Command: chain", text)
+        self.assertIn("Command: token", text)
         self.assertIn("- none", text)
 
     def test_unknown_topic_reports_to_stderr(self):
@@ -42,6 +46,8 @@ class ReplHelpTests(unittest.TestCase):
         """Render concise prompt-specific command lists for each REPL stage."""
         with patch("sys.stdout", new_callable=io.StringIO) as out:
             repl_help.print_stage_help("watchlist", "watchlist: kite")
+            repl_help.print_stage_help("index", "index: nifty")
+            repl_help.print_stage_help("config", "config")
             repl_help.print_stage_help("unknown")
             repl_help.print_help("?", "Nd|Nmo(<12)|Ny")
         text = out.getvalue()
@@ -49,9 +55,20 @@ class ReplHelpTests(unittest.TestCase):
         self.assertIn("add <codes...>", text)
         self.assertIn("delete all", text)
         self.assertIn("watchlist                   Exit watchlist mode", text)
+        self.assertIn("chain | oc [qualifier]", text)
+        self.assertIn("token add upstox <token>", text)
         self.assertIn("General commands:", text)
         self.assertIn("Commands available here (unknown):", text)
         self.assertIn("Command: ?", text)
+
+        with patch("sys.stdout", new_callable=io.StringIO) as config_out:
+            repl_help.print_stage_help("config", "config")
+        self.assertIn("end | exit", config_out.getvalue())
+        self.assertNotIn("cache | cache clear", config_out.getvalue())
+
+        with patch("sys.stdout", new_callable=io.StringIO) as stock_out:
+            repl_help.print_stage_help("stock", "stock: infy")
+        self.assertIn("chain nifty [qualifier]", stock_out.getvalue())
 
 
 if __name__ == "__main__":

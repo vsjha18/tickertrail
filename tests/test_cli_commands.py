@@ -60,6 +60,7 @@ class HelperBehaviorTests(unittest.TestCase):
         self.assertEqual(cli._prompt_for_symbol("BEL.NS"), "tt>stock>bel> ")
         self.assertEqual(cli._prompt_for_symbol("^NSEI"), "tt>index>nifty> ")
         self.assertEqual(cli._prompt_for_context("^NSEI", "sharekhan"), "tt>watchlist>sharekhan> ")
+        self.assertEqual(cli._prompt_for_context("^NSEI", None, config_mode=True), "tt>config> ")
 
     @patch("tickertrail.cli.yf.Ticker")
     def test_get_quote_payload_merge_and_fallbacks(self, mock_ticker):

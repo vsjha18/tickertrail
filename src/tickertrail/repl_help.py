@@ -38,6 +38,10 @@ _COMMAND_ALIASES: dict[str, str] = {
     "index": "index",
     "index list": "index list",
     "snap": "snap",
+    "chain": "chain",
+    "oc": "chain",
+    "config": "config",
+    "token": "token",
     "move": "move",
     "moves": "move",
     "trend": "trend",
@@ -83,7 +87,7 @@ _OVERVIEW_LINES = (
     "Tickertrail Help",
     "===============",
     "Use `help <command>` for command-level details.",
-    "Use `help core|chart|table|watchlist|index` for category summaries.",
+    "Use `help core|chart|table|watchlist|index|config` for category summaries.",
     "",
     "Core Commands:",
     "  ?                           Show commands for the current prompt",
@@ -96,6 +100,7 @@ _OVERVIEW_LINES = (
     "  !<shell-cmd>                Run shell command",
     "  cache                       Show today's persisted history cache summary",
     "  cache clear                 Clear today's persisted history cache",
+    "  config                      Enter configuration mode",
     "",
     "Analytics:",
     "  move [period]               Directional move-dot board (alias: moves)",
@@ -110,6 +115,7 @@ _OVERVIEW_LINES = (
     "  news <code>                 Recent Yahoo symbol headlines",
     "  index | index list          Index board and symbol catalog",
     "  snap                        Active index/watchlist snapshot",
+    "  chain nifty [near|next|far|month]   NIFTY option chain",
     "",
     "Charts + Tables:",
     "  chart swing ... | c ...     Swing chart",
@@ -137,6 +143,9 @@ _OVERVIEW_LINES = (
     "  watchlist open swing",
     "  add tcs infy reliance",
     "  snap",
+    "  config",
+    "  token add upstox <token>",
+    "  chain nifty next",
     "",
 )
 
@@ -147,6 +156,8 @@ _STAGE_HELP_LINES: dict[str, tuple[str, ...]] = {
         "  watchlist open <name>       Open a watchlist",
         "  watchlist create|list|delete|merge ...",
         "  index | index list          Show indices",
+        "  chain nifty [qualifier]     Show NIFTY option chain",
+        "  config                      Enter configuration mode",
         "  code <query> | news <code>  Find a ticker or show news",
         "  cmp <codes...> [period [agg]]",
     ),
@@ -160,6 +171,7 @@ _STAGE_HELP_LINES: dict[str, tuple[str, ...]] = {
     ),
     "index": (
         "  quote | q | snap            Refresh or show constituents",
+        "  chain | oc [qualifier]      NIFTY option chain (NIFTY context)",
         "  move | trend | relret | corr [period]",
         "  c | cc | t | tt ...         Show charts or tables",
         "  <period>                    Show a swing chart",
@@ -178,6 +190,11 @@ _STAGE_HELP_LINES: dict[str, tuple[str, ...]] = {
         "  watchlist                   Exit watchlist mode",
         "  watchlist create|list|open|delete|merge ...",
     ),
+    "config": (
+        "  token add upstox <token>    Save the inline analytics token",
+        "  token status upstox         Show token-file status",
+        "  end | exit                  Return directly to tt>",
+    ),
 }
 
 
@@ -187,9 +204,18 @@ _STAGE_HELP_COMMON_LINES = (
     "  code <query> | news <code>  Find a ticker or show news",
     "  cmp <codes...> [period [agg]]",
     "  index | index list          Show indices",
+    "  chain nifty [qualifier]     Show NIFTY option chain",
+    "  config                      Enter configuration mode",
     "  cache | cache clear         Inspect or clear history cache",
     "  cls | clear | !<shell-cmd>  Terminal utilities",
     "  quit | exit                 Exit TickerTrail",
+)
+
+
+_CONFIG_STAGE_HELP_COMMON_LINES = (
+    "  ?                           Show this config-specific list",
+    "  h | help [command]          Show config or command details",
+    "  end | exit                  Return directly to tt>",
 )
 
 
@@ -220,13 +246,28 @@ _TOPIC_SUMMARIES: dict[str, tuple[str, ...]] = {
         "",
         "Index Commands:",
         "  index | index list | snap",
+        "  chain | oc [near|next|far|month] [strikes <n>]",
         "  move [period] | trend | relret [period] | corr [period]",
         "",
         "Examples:",
         "  index",
         "  index list",
         "  nifty",
+        "  chain next",
         "  move 1mo",
+        "",
+    ),
+    "config": (
+        "",
+        "Configuration Commands:",
+        "  token add upstox <token>",
+        "  token status upstox",
+        "  end | exit",
+        "",
+        "Examples:",
+        "  config",
+        "  token add upstox <token>",
+        "  end",
         "",
     ),
     "chart": (
@@ -373,6 +414,37 @@ def _command_entries(period_hint: str) -> dict[str, HelpEntry]:
             ),
             examples=("watchlist open swing", "snap", "nifty", "snap"),
         ),
+        "chain": HelpEntry(
+            "chain",
+            ("oc",),
+            (
+                "chain [near|next|far|month] [strikes <1-25>]",
+                "chain expiry YYYY-MM-DD [strikes <1-25>]",
+                "chain nifty [near|next|far|month] [strikes <1-25>]",
+            ),
+            (
+                "Show a descending NIFTY option-chain spine with calls and puts.",
+                "Includes LTP change, Delta, Gamma, Theta, Vega, IV, volume, and OI.",
+                "Requires an Upstox analytics token configured through config mode.",
+            ),
+            ("expiry: near", "strikes on each side of ATM: 10"),
+            ("chain", "chain next", "chain month strikes 15", "chain expiry 2026-08-27"),
+        ),
+        "config": HelpEntry(
+            "config",
+            usage=("config",),
+            details=("Enter the single-level TickerTrail configuration prompt.",),
+            examples=("config",),
+        ),
+        "token": HelpEntry(
+            "token",
+            usage=("token add upstox <token>", "token status upstox"),
+            details=(
+                "Save an inline Upstox analytics token to the ignored local token file.",
+                "Available only from tt>config>; use `end` to return to tt>.",
+            ),
+            examples=("token add upstox <token>", "token status upstox"),
+        ),
         "move": HelpEntry(
             "move",
             ("moves",),
@@ -498,7 +570,8 @@ def print_stage_help(stage: str, label: str | None = None) -> None:
     for line in stage_lines:
         print(line)
     print("\nGeneral commands:")
-    for line in _STAGE_HELP_COMMON_LINES:
+    common_lines = _CONFIG_STAGE_HELP_COMMON_LINES if normalized_stage == "config" else _STAGE_HELP_COMMON_LINES
+    for line in common_lines:
         print(line)
     print()
 
