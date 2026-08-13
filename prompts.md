@@ -701,6 +701,7 @@ Chain grammar:
 - Stock/index context: `chain|oc [near|next|far|month] [strikes <1-25>]`.
 - Stock/index context exact date: `chain|oc expiry YYYY-MM-DD [strikes <1-25>]`.
 - Any prompt can use `chain|oc <symbol|index> ...` for an explicit target.
+- Keep `chain ?`, `oc ?`, and `help chain` situational: stock/index prompts show only contextual forms without a redundant target; root/watchlist prompts show only explicit target forms.
 - Defaults: `near`, 10 strikes below and 10 strikes above ATM.
 - Resolve every target through `/v2/instruments/search` with NSE/BSE and EQ/INDEX filters. Require an exact ticker, name, or short-name identity; prefer the exchange implied by `.NS`/`.BO`, otherwise prefer NSE. Reuse TickerTrail's index aliases before search.
 - Validate every request through `/v2/option/contract` without an expiry filter. `near`, `next`, and `far` are the first three actual future expiry dates; `month` is the first future contract date marked non-weekly; an exact date must be listed. Empty contracts mean the stock/index is not currently an F&O underlying. Do not send static relative keywords directly to the chain endpoint because a calendar week with no remaining expiry can return an empty chain.

@@ -425,7 +425,7 @@ For every qualifier—including an exact date—TickerTrail first reads the sele
 
 The optional `strikes <1-25>` modifier controls how many strikes are shown on each side of ATM; the default is 10. The chain is ordered from higher strikes at the top to lower strikes at the bottom. Calls are on the left, puts on the right, and the strike spine is centered and bold. Headers and the complete ATM row are bold. Each call/put half is independently colored by its daily move, and LTP shows that move in brackets. The compact table shows LTP, Delta immediately beside it, Theta, volume, and OI; IV, Gamma, and Vega are omitted so the table fits within 120 columns for typical values. The heading shows the selected underlying's current value and its absolute and percentage move.
 
-Use `chain ?`, `oc ?`, or `help chain` for situational help. Upstox access is read-only in this feature and never falls back to another data source. HTTP requests identify TickerTrail explicitly so Upstox's gateway does not reject Python's default client signature; API, authentication, and gateway errors remain distinct in CLI output.
+Use `chain ?`, `oc ?`, or `help chain` for situational help. In a stock/index prompt, help shows only contextual forms such as `chain next`; at root or in a watchlist, it shows explicit forms such as `chain hdfcbank next`. Upstox access is read-only in this feature and never falls back to another data source. HTTP requests identify TickerTrail explicitly so Upstox's gateway does not reject Python's default client signature; API, authentication, and gateway errors remain distinct in CLI output.
 
 ## Charts and Tables
 

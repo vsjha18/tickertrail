@@ -2436,6 +2436,19 @@ def _prompt_for_context(
     return _prompt_for_symbol(symbol, prompt_label=prompt_label)
 
 
+def _help_stage_for_context(context: _ReplContext) -> str:
+    """Return the situational-help stage for the active REPL context."""
+    if context.config_mode:
+        return "config"
+    if context.watchlist_name:
+        return "watchlist"
+    if _is_index_context_symbol(context.symbol):
+        return "index"
+    if context.symbol:
+        return "stock"
+    return "base"
+
+
 def _handle_config_token_command(cmd: str) -> None:
     """Handle inline Upstox token-add commands in configuration mode."""
     parts = cmd.split(maxsplit=3)
@@ -3480,17 +3493,14 @@ def _run_repl(
                 return 0
             if lower == "?":
                 # Contextual help must be handled before symbol parsing so it stays local and network-free.
-                if context.watchlist_name:
-                    help_stage = "watchlist"
+                help_stage = _help_stage_for_context(context)
+                if help_stage == "watchlist":
                     help_label = f"watchlist: {context.watchlist_name}"
-                elif _is_index_context_symbol(context.symbol):
-                    help_stage = "index"
+                elif help_stage == "index":
                     help_label = f"index: {context.prompt_label or context.symbol}"
-                elif context.symbol:
-                    help_stage = "stock"
+                elif help_stage == "stock":
                     help_label = f"stock: {context.prompt_label or context.symbol}"
                 else:
-                    help_stage = "base"
                     help_label = "tt"
                 repl_help.print_stage_help(help_stage, help_label)
                 continue
@@ -3518,7 +3528,11 @@ def _run_repl(
                 repl_help.print_help(None, _ANALYTICS_PERIOD_HINT)
                 continue
             if lower.startswith("help "):
-                repl_help.print_help(cmd.split(maxsplit=1)[1].strip(), _ANALYTICS_PERIOD_HINT)
+                repl_help.print_help(
+                    cmd.split(maxsplit=1)[1].strip(),
+                    _ANALYTICS_PERIOD_HINT,
+                    _help_stage_for_context(context),
+                )
                 continue
             if lower in {"cls", "clear"}:
                 # ANSI clear-screen + cursor-home; keep REPL session active.
@@ -3679,7 +3693,11 @@ def _run_repl(
                 _print_index_constituent_snap(context.symbol)
                 continue
             if lower in {"chain ?", "oc ?"}:
-                repl_help.print_help("chain", _ANALYTICS_PERIOD_HINT)
+                repl_help.print_help(
+                    "chain",
+                    _ANALYTICS_PERIOD_HINT,
+                    _help_stage_for_context(context),
+                )
                 continue
             if lower == "chain" or lower.startswith("chain ") or lower == "oc" or lower.startswith("oc "):
                 parts = cmd.split()

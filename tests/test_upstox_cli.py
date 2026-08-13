@@ -142,6 +142,8 @@ class UpstoxCliTests(unittest.TestCase):
             ],
         )
         self.assertIn("Command: chain", out.getvalue())
+        self.assertNotIn("chain <symbol|index>", out.getvalue())
+        self.assertIn("Use the active stock/index", out.getvalue())
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._print_option_chain", return_value=0)

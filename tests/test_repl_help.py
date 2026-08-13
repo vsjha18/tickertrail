@@ -77,6 +77,23 @@ class ReplHelpTests(unittest.TestCase):
         self.assertIn("chain <symbol|index>", stock_out.getvalue())
         self.assertIn("show token [upstox]", stock_out.getvalue())
 
+    def test_chain_help_limits_grammar_to_the_current_prompt(self):
+        """Keep contextual chain help free of redundant target arguments."""
+        with patch("sys.stdout", new_callable=io.StringIO) as stock_out:
+            repl_help.print_help("chain", "Nd|Nmo(<12)|Ny", "stock")
+        stock_text = stock_out.getvalue()
+        self.assertIn("chain [near|next|far|month]", stock_text)
+        self.assertIn("Use the active stock/index", stock_text)
+        self.assertNotIn("chain <symbol|index>", stock_text)
+        self.assertNotIn("chain reliance", stock_text)
+
+        with patch("sys.stdout", new_callable=io.StringIO) as root_out:
+            repl_help.print_help("oc", "Nd|Nmo(<12)|Ny", "base")
+        root_text = root_out.getvalue()
+        self.assertIn("chain <symbol|index>", root_text)
+        self.assertIn("Name the target", root_text)
+        self.assertNotIn("  chain next\n", root_text)
+
 
 if __name__ == "__main__":
     unittest.main()

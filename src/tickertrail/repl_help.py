@@ -580,6 +580,38 @@ def _print_command_help(entry: HelpEntry) -> None:
     print()
 
 
+def _chain_help_for_stage(entry: HelpEntry, stage: str | None) -> HelpEntry:
+    """Limit chain grammar to forms usable from the current prompt stage."""
+    normalized_stage = (stage or "").strip().lower()
+    if normalized_stage in {"stock", "index"}:
+        return HelpEntry(
+            entry.command,
+            entry.aliases,
+            entry.usage[:2],
+            (
+                "Use the active stock/index from the current prompt.",
+                *entry.details[:3],
+                entry.details[-1],
+            ),
+            entry.defaults,
+            ("chain", "chain next", "chain month strikes 15", "chain expiry 2026-08-27"),
+        )
+    if normalized_stage in {"base", "watchlist"}:
+        return HelpEntry(
+            entry.command,
+            entry.aliases,
+            entry.usage[2:],
+            (
+                "Name the target because this prompt has no active stock/index.",
+                *entry.details[:3],
+                entry.details[-1],
+            ),
+            entry.defaults,
+            ("chain reliance next", "chain bank month strikes 15", "chain sensex"),
+        )
+    return entry
+
+
 def print_stage_help(stage: str, label: str | None = None) -> None:
     """Render the commands available at the current REPL prompt stage."""
     normalized_stage = stage.strip().lower()
@@ -595,7 +627,7 @@ def print_stage_help(stage: str, label: str | None = None) -> None:
     print()
 
 
-def print_help(topic: str | None, period_hint: str) -> None:
+def print_help(topic: str | None, period_hint: str, stage: str | None = None) -> None:
     """Render REPL overview, topic, or command help for one user input."""
     normalized = " ".join((topic or "").strip().lower().split())
     if not normalized:
@@ -616,4 +648,7 @@ def print_help(topic: str | None, period_hint: str) -> None:
             file=sys.stderr,
         )
         return
-    _print_command_help(_command_entries(period_hint)[canonical])
+    entry = _command_entries(period_hint)[canonical]
+    if canonical == "chain":
+        entry = _chain_help_for_stage(entry, stage)
+    _print_command_help(entry)
