@@ -36,6 +36,15 @@ class DividendEvent:
 
 
 @dataclass(frozen=True)
+class CorporateActionEvent:
+    """Describe one non-dividend corporate action returned by Upstox."""
+
+    action_date: dt.date | None
+    action_type: str
+    ratio: str
+
+
+@dataclass(frozen=True)
 class CompanyFundamentals:
     """Collect normalized company fundamentals for one terminal dashboard."""
 
@@ -48,8 +57,10 @@ class CompanyFundamentals:
     annual: dict[str, tuple[HistoryPoint, ...]]
     annual_eps: tuple[HistoryPoint, ...]
     annual_cfo: tuple[HistoryPoint, ...]
+    balance_sheet: dict[str, tuple[HistoryPoint, ...]]
     shareholdings: dict[str, tuple[HistoryPoint, ...]]
     dividends: tuple[DividendEvent, ...]
+    corporate_actions: tuple[CorporateActionEvent, ...]
     as_of: dt.date
 
 
@@ -172,6 +183,29 @@ def _dividend_events(value: Any) -> tuple[DividendEvent, ...]:
     return tuple(sorted(events, key=lambda event: event.ex_date or dt.date.min, reverse=True))
 
 
+def _corporate_action_events(value: Any) -> tuple[CorporateActionEvent, ...]:
+    """Normalize bonus, split, rights, and other non-dividend corporate actions."""
+    if not isinstance(value, list):
+        return ()
+    events: list[CorporateActionEvent] = []
+    for raw_event in value:
+        if not isinstance(raw_event, dict):
+            continue
+        action_type = str(raw_event.get("name") or "").strip()
+        if not action_type or action_type.casefold() == "dividend":
+            continue
+        events.append(
+            CorporateActionEvent(
+                action_date=_api_date(raw_event.get("expiry_date")),
+                action_type=action_type,
+                ratio=str(raw_event.get("ratio") or "n/a").strip(),
+            )
+        )
+    return tuple(
+        sorted(events, key=lambda event: event.action_date or dt.date.min, reverse=True)
+    )
+
+
 def fetch_company_fundamentals(
     token: str,
     query: str,
@@ -216,12 +250,18 @@ def fetch_company_fundamentals(
         {"type": "consolidated"},
         token,
     ).get("data")
+    balance_data = fetch(
+        f"{base}/balance-sheet",
+        {"type": "consolidated", "fs": "true"},
+        token,
+    ).get("data")
     holding_data = fetch(f"{base}/share-holdings", {}, token).get("data")
     action_data = fetch(f"{base}/corporate-actions", {}, token).get("data")
 
     quarterly_payload = quarterly_data if isinstance(quarterly_data, dict) else {}
     annual_payload = annual_data if isinstance(annual_data, dict) else {}
     cash_payload = cash_data if isinstance(cash_data, dict) else {}
+    balance_payload = balance_data if isinstance(balance_data, dict) else {}
     quote: upstox_service.UnderlyingQuote | None = None
     try:
         quote = upstox_service.fetch_underlying_quote(
@@ -254,8 +294,12 @@ def fetch_company_fundamentals(
         annual=_category_histories(annual_payload.get("income_statement"), "category"),
         annual_eps=annual_eps,
         annual_cfo=annual_cfo,
+        balance_sheet=_category_histories(
+            balance_payload.get("full_statement"), "particular"
+        ),
         shareholdings=_category_histories(holding_data, "category"),
         dividends=_dividend_events(action_data),
+        corporate_actions=_corporate_action_events(action_data),
         as_of=as_of or dt.datetime.now(ZoneInfo("Asia/Kolkata")).date(),
     )
 
@@ -332,6 +376,22 @@ def _point_map(history: tuple[HistoryPoint, ...]) -> dict[str, HistoryPoint]:
     return {point.period: point for point in history}
 
 
+def _margin_history(
+    numerator: tuple[HistoryPoint, ...],
+    denominator: tuple[HistoryPoint, ...],
+) -> tuple[HistoryPoint, ...]:
+    """Derive a period-aligned percentage margin from two financial histories."""
+    denominator_by_period = _point_map(denominator)
+    margins: list[HistoryPoint] = []
+    for point in numerator:
+        base = denominator_by_period.get(point.period)
+        value = None
+        if point.value is not None and base is not None and base.value not in {None, 0.0}:
+            value = (point.value / base.value) * 100
+        margins.append(HistoryPoint(point.period, value, None))
+    return tuple(margins)
+
+
 def _short_period(period: str, *, annual: bool) -> str:
     """Compact an Upstox month-year label for a terminal table header."""
     try:
@@ -394,14 +454,14 @@ def _print_table(
 
 def _history_rows(
     periods: list[str],
-    series: list[tuple[str, tuple[HistoryPoint, ...], bool]],
+    series: list[tuple[str, tuple[HistoryPoint, ...], str]],
 ) -> tuple[list[list[str]], dict[tuple[int, int], str]]:
     """Build aligned value/change rows and their semantic change colors."""
     rows: list[list[str]] = []
     colors: dict[tuple[int, int], str] = {}
-    for label, history, show_change in series:
+    for label, history, display_kind in series:
         by_period = _point_map(history)
-        if show_change:
+        if display_kind == "change":
             values = [
                 "n/a" if by_period.get(period) is None or by_period[period].change_pct is None
                 else f"{by_period[period].change_pct:+.2f}%"
@@ -410,6 +470,17 @@ def _history_rows(
             for column_index, period in enumerate(periods, start=1):
                 point = by_period.get(period)
                 color = _change_color(point.change_pct if point is not None else None)
+                if color is not None:
+                    colors[(len(rows), column_index)] = color
+        elif display_kind == "percent":
+            values = [
+                _format_metric(by_period[period].value, "percent")
+                if period in by_period else "n/a"
+                for period in periods
+            ]
+            for column_index, period in enumerate(periods, start=1):
+                point = by_period.get(period)
+                color = _change_color(point.value if point is not None else None)
                 if color is not None:
                     colors[(len(rows), column_index)] = color
         else:
@@ -454,15 +525,19 @@ def render_company_fundamentals(
     _print_table("VALUATION & QUALITY", ["Metric", "Company", "Sector"], metric_rows, style_text)
 
     revenue = snapshot.quarterly.get("revenue", ())
+    operating_profit = snapshot.quarterly.get("operating_profit", ())
     quarterly_pat = snapshot.quarterly.get("net_profit", ())
-    quarter_periods = _periods(revenue, quarterly_pat)
+    quarter_periods = _periods(revenue, operating_profit, quarterly_pat)
     quarter_rows, quarter_colors = _history_rows(
         quarter_periods,
         [
-            ("Sales", revenue, False),
-            ("Sales QoQ", revenue, True),
-            ("PAT", quarterly_pat, False),
-            ("PAT QoQ", quarterly_pat, True),
+            ("Sales", revenue, "value"),
+            ("Sales QoQ", revenue, "change"),
+            ("Operating Profit", operating_profit, "value"),
+            ("OPM", _margin_history(operating_profit, revenue), "percent"),
+            ("PAT", quarterly_pat, "value"),
+            ("PAT QoQ", quarterly_pat, "change"),
+            ("PAT Margin", _margin_history(quarterly_pat, revenue), "percent"),
         ],
     ) if quarter_periods else ([], {})
     _print_table(
@@ -478,10 +553,10 @@ def render_company_fundamentals(
     annual_rows, annual_colors = _history_rows(
         annual_periods,
         [
-            ("PAT", annual_pat, False),
-            ("PAT YoY", annual_pat, True),
-            ("CFO", snapshot.annual_cfo, False),
-            ("CFO YoY", snapshot.annual_cfo, True),
+            ("PAT", annual_pat, "value"),
+            ("PAT YoY", annual_pat, "change"),
+            ("CFO", snapshot.annual_cfo, "value"),
+            ("CFO YoY", snapshot.annual_cfo, "change"),
         ],
     ) if annual_periods else ([], {})
     _print_table(
@@ -490,6 +565,30 @@ def render_company_fundamentals(
         annual_rows,
         style_text,
         colors=annual_colors,
+    )
+
+    balance_order = (
+        ("total assets", "Total Assets"),
+        ("equity capital", "Equity"),
+        ("current assets", "Current Assets"),
+        ("current liabilities", "Current Liabilities"),
+        ("net current asset", "Net Current Assets"),
+    )
+    balance_periods = _periods(
+        *(snapshot.balance_sheet.get(key, ()) for key, _label in balance_order)
+    )
+    balance_rows, _balance_colors = _history_rows(
+        balance_periods,
+        [
+            (label, snapshot.balance_sheet.get(key, ()), "value")
+            for key, label in balance_order
+        ],
+    ) if balance_periods else ([], {})
+    _print_table(
+        "BALANCE SHEET",
+        ["₹ crore", *[_short_period(period, annual=True) for period in balance_periods]],
+        balance_rows,
+        style_text,
     )
 
     holding_order = ("promoters", "fii", "mutual_funds", "other_dii", "retail_and_other")
@@ -542,5 +641,26 @@ def render_company_fundamentals(
     print(
         "History returned by Upstox: "
         f"{len(quarter_periods)} quarters · {len(annual_periods)} years · "
-        f"{len(holding_periods)} shareholding quarters · {len(snapshot.dividends)} dividend events."
+        f"{len(balance_periods)} balance-sheet years · "
+        f"{len(holding_periods)} shareholding quarters · {len(snapshot.dividends)} dividend events · "
+        f"{len(snapshot.corporate_actions)} other corporate actions."
+    )
+
+    # Keep non-dividend events last so dividend history remains a dedicated table.
+    corporate_action_rows = [
+        [
+            event.action_date.strftime("%d %b %Y")
+            if event.action_date is not None else "n/a",
+            event.action_type,
+            event.ratio,
+        ]
+        for event in snapshot.corporate_actions
+    ]
+    if not corporate_action_rows:
+        corporate_action_rows = [["—", "None returned by Upstox", "—"]]
+    _print_table(
+        "CORPORATE ACTIONS",
+        ["Ex/effective date", "Action", "Ratio"],
+        corporate_action_rows,
+        style_text,
     )

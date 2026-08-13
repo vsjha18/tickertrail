@@ -659,7 +659,7 @@ def _pad_cell(text: str, width: int, align: str = "left") -> str:
 
 def _range_line(low: float, high: float, current: float, width: int = 36) -> str:
     """Build an ASCII range bar with a marker at the current value."""
-    if high <= low:
+    if not all(math.isfinite(value) for value in (low, high, current)) or high <= low:
         return "[n/a]"
     usable = max(10, width)
     pos = int(round((current - low) / (high - low) * (usable - 1)))
@@ -2177,6 +2177,14 @@ def _draw_chart(
         return 3
 
     points, prices = _fetch_close_points_for_token(symbol, period_token=period, interval=interval)
+    # Cached or live provider rows may contain NaN placeholders; charts require finite prices.
+    finite_history = [
+        (point, float(price))
+        for point, price in zip(points, prices)
+        if isinstance(price, (int, float)) and math.isfinite(float(price))
+    ]
+    points = [point for point, _price in finite_history]
+    prices = [price for _point, price in finite_history]
     if not prices:
         print(
             f"No historical data for '{symbol}' with period={period} interval={interval}.",

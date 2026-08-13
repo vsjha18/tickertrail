@@ -27,6 +27,71 @@ def _sample_df() -> pd.DataFrame:
 
 
 class DailyHistoryCacheTests(unittest.TestCase):
+    def test_close_points_drop_non_finite_cached_prices(self) -> None:
+        """Ignore NaN placeholders in an existing cache without re-downloading data."""
+        points = [
+            dt.datetime(2026, 8, 10),
+            dt.datetime(2026, 8, 11),
+            dt.datetime(2026, 8, 12),
+        ]
+        old_day = price_history._CACHE_DAY
+        old_store = price_history._CACHE_STORE
+        old_metrics = dict(price_history._CACHE_METRICS)
+        try:
+            price_history._CACHE_DAY = "2026-08-14"
+            price_history._CACHE_STORE = {
+                "close_points|HINDPETRO.NS|6mo|1d": {
+                    "points": [point.isoformat() for point in points],
+                    "prices": [390.0, float("nan"), 392.9],
+                }
+            }
+            with patch("tickertrail.price_history._cache_day", return_value="2026-08-14"):
+                clean_points, clean_prices = price_history.fetch_close_points_for_token(
+                    symbol="HINDPETRO.NS",
+                    period_token="6mo",
+                    interval="1d",
+                    download_fn=lambda *_args, **_kwargs: self.fail("cache should be reused"),
+                    track_network_call=lambda _name: None,
+                )
+            self.assertEqual(clean_points, [points[0], points[2]])
+            self.assertEqual(clean_prices, [390.0, 392.9])
+        finally:
+            price_history._CACHE_DAY = old_day
+            price_history._CACHE_STORE = old_store
+            price_history._CACHE_METRICS = old_metrics
+
+    def test_close_points_drop_non_finite_download_rows_before_caching(self) -> None:
+        """Remove provider NaNs from fresh history and its persisted cache record."""
+        frame = _sample_df()
+        frame.loc[dt.datetime(2026, 2, 20), "Close"] = float("nan")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            old_dir = price_history._CACHE_DIR
+            old_day = price_history._CACHE_DAY
+            old_store = price_history._CACHE_STORE
+            old_metrics = dict(price_history._CACHE_METRICS)
+            try:
+                price_history._CACHE_DIR = Path(td)
+                price_history._CACHE_DAY = None
+                price_history._CACHE_STORE = None
+                with patch("tickertrail.price_history._cache_day", return_value="2026-02-22"):
+                    points, prices = price_history.fetch_close_points_for_token(
+                        symbol="HINDPETRO.NS",
+                        period_token="6mo",
+                        interval="1d",
+                        download_fn=lambda *_args, **_kwargs: frame,
+                        track_network_call=lambda _name: None,
+                    )
+                self.assertEqual(len(points), 1)
+                self.assertEqual(prices, [101.0])
+                assert price_history._CACHE_STORE is not None
+                cached = price_history._CACHE_STORE["close_points|HINDPETRO.NS|6mo|1d"]
+                self.assertEqual(cached["prices"], [101.0])
+            finally:
+                price_history._CACHE_DIR = old_dir
+                price_history._CACHE_DAY = old_day
+                price_history._CACHE_STORE = old_store
+                price_history._CACHE_METRICS = old_metrics
+
     def test_close_points_yearly_aggregation_collapses_monthly_to_year_end(self) -> None:
         """`1y` aggregation should return one last-close point per calendar year."""
         index = pd.DatetimeIndex(

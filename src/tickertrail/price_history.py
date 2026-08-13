@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import json
+import math
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, Callable
@@ -46,6 +47,22 @@ _EOD_SNAPSHOT_FIELDS = (
     "marketDataTimestamp",
     "marketDataIsIntraday",
 )
+
+
+def _finite_close_points(
+    points: list[dt.datetime],
+    prices: list[float],
+) -> tuple[list[dt.datetime], list[float]]:
+    """Drop non-finite close values while preserving point/price alignment."""
+    cleaned: list[tuple[dt.datetime, float]] = []
+    for point, raw_price in zip(points, prices):
+        try:
+            price = float(raw_price)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(price):
+            cleaned.append((point, price))
+    return [point for point, _price in cleaned], [price for _point, price in cleaned]
 
 
 def _cache_now() -> dt.datetime:
@@ -285,7 +302,9 @@ def fetch_close_points_for_token(
                         raise ValueError("invalid point")
                     points.append(dt.datetime.fromisoformat(point_raw))
                     prices.append(float(price_raw))
-                return points, prices
+                finite_points, finite_prices = _finite_close_points(points, prices)
+                if finite_prices:
+                    return finite_points, finite_prices
             except (TypeError, ValueError):
                 pass
 
@@ -322,6 +341,10 @@ def fetch_close_points_for_token(
         close = close.iloc[:, 0]
     idx = [i.to_pydatetime() for i in close.index]
     prices = [float(v) for v in close.tolist()]
+    # Yahoo may append NaN placeholders; never persist or expose them as market prices.
+    idx, prices = _finite_close_points(idx, prices)
+    if not prices:
+        return [], []
     if interval == "1y":
         yearly_last: dict[int, tuple[dt.datetime, float]] = {}
         for point, price in zip(idx, prices):

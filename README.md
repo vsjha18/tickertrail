@@ -409,12 +409,14 @@ The consolidated dashboard contains:
 - derived PEG using P/E divided by three-year diluted-EPS CAGR
 - derived book value/share using current price divided by P/B
 - derived trailing-12-month dividend yield using cash dividends returned by Upstox
-- quarterly sales and PAT with QoQ changes
+- quarterly sales, operating profit, OPM, PAT, PAT margin, and retained Sales/PAT QoQ rows
 - annual PAT and CFO with YoY changes
+- four-year balance sheet with total assets, equity, current assets/liabilities, and net current assets
 - quarterly promoter, FII, mutual-fund, other-DII, and retail/other shareholding
 - dividend history with ex-date, type, and amount per share
+- a separate final corporate-actions table for bonus, split, rights, and other non-dividend events
 
-TickerTrail renders every period returned by Upstox and prints the actual history counts below the tables. As of the feature's validation, Upstox returned four quarters, four financial years, four shareholding quarters, and only the dividend events available in its response; the command does not claim an eight-to-ten-year Screener-style history. PEG remains `n/a` when four usable positive EPS observations do not produce positive growth. ROCE can be unavailable for financial companies because Upstox returns sector-specific bank ratios instead. The current-price request is optional: if it fails, direct statement data still renders while price-derived metrics show `n/a`.
+TickerTrail renders every period returned by Upstox and prints the actual history counts below the tables. The dashboard uses nine Upstox calls; the balance sheet is the only added endpoint, while non-dividend corporate actions reuse the existing corporate-actions response. As of the feature's validation, Upstox returned four quarters, four financial years, four balance-sheet years, four shareholding quarters, and only the corporate-action events available in its response; the command does not claim an eight-to-ten-year Screener-style history. PEG remains `n/a` when four usable positive EPS observations do not produce positive growth. ROCE can be unavailable for financial companies because Upstox returns sector-specific bank ratios instead. The current-price request is optional: if it fails, direct statement data still renders while price-derived metrics show `n/a`.
 
 ## Stock and Index Option Chains (Upstox)
 
@@ -469,6 +471,8 @@ Use `chain ?`, `oc ?`, or `help chain` for situational help. In a stock/index pr
 - Swing table (dash override): `t [<benchmark>] - <period|agg> [agg]`
 - Intraday table: `tt [<benchmark>] [<1m|5m|15m|30m|1hr>]`
 - Multi-symbol compare: `cmp <symbol1> <symbol2> [symbolN ...] [period [agg]]`
+
+Historical close rows with non-finite provider values such as `NaN` are discarded with their matching timestamps before chart calculations or caching. Existing cache entries are sanitized when read, so a trailing Yahoo placeholder cannot become the chart's last price or crash its range bar.
 
 Period and aggregation tokens:
 - Period units: `d`, `w`, `mo`, `y`, `max`

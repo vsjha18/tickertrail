@@ -62,6 +62,27 @@ def _payload_for(endpoint: str) -> dict[str, object]:
                 "full_statement": [],
             }
         }
+    if endpoint.endswith("/balance-sheet"):
+        periods = (
+            ("Mar 2026", 2000, "+10%"),
+            ("Mar 2025", 1800, "+8%"),
+            ("Mar 2024", 1667, "+5%"),
+            ("Mar 2023", 1588, "+4%"),
+        )
+        return {
+            "data": {
+                "full_statement": [
+                    {"particular": particular, "history": _history(*periods)}
+                    for particular in (
+                        "Total Assets",
+                        "Equity Capital",
+                        "Current Assets",
+                        "Current Liabilities",
+                        "Net Current Asset",
+                    )
+                ]
+            }
+        }
     if endpoint.endswith("/share-holdings"):
         history = _history(
             ("Jun 2026", 50.1, "+0.1%"),
@@ -119,6 +140,15 @@ def _fake_request(endpoint, params, token):
                     "income_statement": [
                         {"category": "revenue", "history": _history(*periods)},
                         {
+                            "category": "operating_profit",
+                            "history": _history(
+                                ("Jun 2026", 50, "+6%"),
+                                ("Mar 2026", 48, "-4%"),
+                                ("Dec 2025", 49, "+2%"),
+                                ("Sep 2025", 48, "+1%"),
+                            ),
+                        },
+                        {
                             "category": "net_profit",
                             "history": _history(
                                 ("Jun 2026", 25, "+5%"),
@@ -167,10 +197,12 @@ class FundamentalsTests(unittest.TestCase):
         self.assertEqual(len(snapshot.quarterly["revenue"]), 4)
         self.assertEqual(len(snapshot.annual["net_profit"]), 4)
         self.assertEqual(len(snapshot.annual_cfo), 4)
+        self.assertEqual(len(snapshot.balance_sheet["total assets"]), 4)
         self.assertEqual(fundamentals.ratio_value(snapshot, "ROE"), (12.5, 11.2))
         self.assertEqual(len(snapshot.shareholdings["promoters"]), 4)
         self.assertEqual(len(snapshot.dividends), 2)
-        self.assertEqual(len(calls), 8)
+        self.assertEqual(len(snapshot.corporate_actions), 1)
+        self.assertEqual(len(calls), 9)
         annual_call = next(
             call for call in calls
             if call[0].endswith("income-statement") and call[1].get("time_period") == "yearly"
@@ -179,6 +211,8 @@ class FundamentalsTests(unittest.TestCase):
             annual_call[1],
             {"type": "consolidated", "time_period": "yearly", "fs": "true"},
         )
+        balance_call = next(call for call in calls if call[0].endswith("balance-sheet"))
+        self.assertEqual(balance_call[1], {"type": "consolidated", "fs": "true"})
         self.assertTrue(all(call[2] == "token" for call in calls))
 
     def test_derived_metrics_use_three_year_eps_and_trailing_dividends(self):
@@ -215,16 +249,34 @@ class FundamentalsTests(unittest.TestCase):
         self.assertIn("VALUATION & QUALITY", text)
         self.assertIn("QUARTERLY PERFORMANCE", text)
         self.assertIn("ANNUAL PROFIT & CASH FLOW", text)
+        self.assertIn("Operating Profit", text)
+        self.assertIn("Sales QoQ", text)
+        self.assertIn("OPM", text)
+        self.assertIn("PAT QoQ", text)
+        self.assertIn("PAT Margin", text)
+        self.assertIn("20.00%", text)
+        self.assertIn("10.00%", text)
+        self.assertIn("BALANCE SHEET", text)
+        self.assertIn("Total Assets", text)
+        self.assertIn("Net Current Assets", text)
         self.assertIn("SHAREHOLDING", text)
         self.assertIn("DIVIDEND HISTORY", text)
+        self.assertIn("CORPORATE ACTIONS", text)
         self.assertIn("CFO", text)
         self.assertNotIn("FCF", text)
         self.assertIn("Jun '26", text)
         self.assertIn("FY26", text)
-        self.assertIn("4 quarters · 4 years · 4 shareholding quarters · 2 dividend events", text)
+        self.assertIn(
+            "4 quarters · 4 years · 4 balance-sheet years · "
+            "4 shareholding quarters · 2 dividend events · 1 other corporate actions",
+            text,
+        )
         self.assertIn("<green>", text)
         self.assertIn("<red>", text)
         self.assertIn("<plain-bold>", text)
+        self.assertGreater(text.index("DIVIDEND HISTORY"), text.index("SHAREHOLDING"))
+        self.assertGreater(text.index("CORPORATE ACTIONS"), text.index("DIVIDEND HISTORY"))
+        self.assertTrue(text.rstrip().endswith("┘"))
 
     def test_missing_and_malformed_inputs_render_as_unavailable(self):
         """Keep sparse company responses readable without false derived values."""
@@ -243,8 +295,10 @@ class FundamentalsTests(unittest.TestCase):
                 fundamentals.HistoryPoint("Mar 2023", 1, None),
             ),
             annual_cfo=(),
+            balance_sheet={},
             shareholdings={},
             dividends=(fundamentals.DividendEvent(None, "n/a", None),),
+            corporate_actions=(),
             as_of=dt.date(2026, 8, 14),
         )
         self.assertIsNone(fundamentals.peg_ratio(snapshot))
@@ -256,7 +310,7 @@ class FundamentalsTests(unittest.TestCase):
                 lambda text, _color=None, _bold=False: text,
                 updated_at=dt.datetime(2026, 8, 14),
             )
-        self.assertGreaterEqual(out.getvalue().count("No data returned by Upstox."), 3)
+        self.assertGreaterEqual(out.getvalue().count("No data returned by Upstox."), 4)
         self.assertIn("n/a", out.getvalue())
 
     def test_sparse_normalizers_and_statement_fallbacks(self):
@@ -271,9 +325,15 @@ class FundamentalsTests(unittest.TestCase):
         self.assertEqual(fundamentals._ratios([{"name": ""}]), ())
         self.assertIsNone(fundamentals._api_date("not-a-date"))
         self.assertEqual(fundamentals._dividend_events(None), ())
+        self.assertEqual(fundamentals._corporate_action_events(None), ())
         self.assertEqual(fundamentals._short_period("unknown", annual=False), "unknown")
         self.assertIsNone(fundamentals._change_color(None))
         self.assertEqual(fundamentals._change_color(0), "gray")
+        missing_margin = fundamentals._margin_history(
+            (fundamentals.HistoryPoint("Mar 2026", 10, None),),
+            (fundamentals.HistoryPoint("Mar 2026", 0, None),),
+        )
+        self.assertIsNone(missing_margin[0].value)
 
         def fallback_request(endpoint, params, token):
             """Replace only annual EPS and CFO payloads with fallback line items."""

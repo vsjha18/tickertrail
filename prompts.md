@@ -361,6 +361,8 @@ Series styling:
 - benchmark co-plot:
   - rebase benchmark to stock start value
   - yellow line, white final marker
+- discard non-finite close rows and their aligned timestamps before chart statistics, title, plotting, and range-bar calculations; sanitize both fresh downloads and existing history-cache records so a trailing `NaN` cannot become the last price
+- if no finite stock closes remain, report no historical data instead of rendering or raising
 
 Axis behavior:
 - swing: date_form d-m-y + adaptive xfrequency
@@ -747,31 +749,35 @@ Grammar and context:
 
 API and normalization:
 - Resolve the active stock exactly through Upstox instrument search and extract its ISIN; reject indices and non-equity instruments.
-- Fetch key ratios, quarterly income statement, yearly income statement with full statement, cash flow, shareholdings, corporate actions, and current LTP.
+- Fetch key ratios, quarterly income statement, yearly income statement with full statement, cash flow, full consolidated balance sheet, shareholdings, corporate actions, and current LTP.
 - Use the API's operating cash-flow summary as CFO; do not label investing cash flow or another proxy as FCF.
 - Normalize ratio strings with or without `%`, malformed fields, missing histories, and absent sector values safely to `n/a`.
 - Treat LTP as optional: statement data must still render when price retrieval fails, while price-derived metrics become `n/a`.
-- Render every history period and dividend event returned by Upstox and print the actual counts. Do not promise 8–10 years; validation in August 2026 returned four quarters, four years, and four shareholding quarters for representative stocks.
+- Render every history period and corporate-action event returned by Upstox and print the actual counts. Do not promise 8–10 years; validation in August 2026 returned four quarters, four annual income/cash-flow years, four balance-sheet years, and four shareholding quarters for representative stocks.
 
 Metrics:
-- Direct: P/E, P/B, ROE, ROCE, latest annual CFO, quarterly sales/PAT, annual PAT/CFO, shareholding, and dividend events.
+- Direct: P/E, P/B, ROE, ROCE, latest annual CFO, quarterly sales/operating profit/PAT, annual PAT/CFO, balance-sheet line items, shareholding, dividends, and non-dividend corporate actions.
+- OPM*: quarterly operating profit divided by quarterly revenue.
+- PAT Margin*: quarterly PAT divided by quarterly revenue.
 - PEG*: P/E divided by the latest three-year diluted-EPS CAGR, requiring four positive EPS observations and positive growth; fall back to basic EPS only when diluted EPS is absent.
 - Book value/share*: current Upstox price divided by P/B.
 - Dividend yield TTM*: sum of returned dividends with ex-dates inside the trailing 365 days divided by current price.
-- Mark every derived metric with `*` and disclose each formula below the tables.
+- Mark valuation-derived metrics with `*` and disclose their formulas below the tables; render OPM and PAT Margin as clearly named percentage rows.
 - Allow sector-specific ratio omissions, especially ROCE for banks, without failing the dashboard.
 
 Rendering:
 - Heading: symbol/name, `FUNDAMENTALS`, consolidated basis, units, IST update time, and Upstox attribution.
 - Bold section/table headers.
-- Sections: `VALUATION & QUALITY`, `QUARTERLY PERFORMANCE`, `ANNUAL PROFIT & CASH FLOW`, `SHAREHOLDING`, and `DIVIDEND HISTORY`.
-- Quarterly rows: Sales, Sales QoQ, PAT, PAT QoQ.
+- Sections in order: `VALUATION & QUALITY`, `QUARTERLY PERFORMANCE`, `ANNUAL PROFIT & CASH FLOW`, `BALANCE SHEET`, `SHAREHOLDING`, `DIVIDEND HISTORY`, and finally `CORPORATE ACTIONS`.
+- Quarterly rows: Sales, Sales QoQ, Operating Profit, OPM, PAT, PAT QoQ, PAT Margin.
 - Annual rows: PAT, PAT YoY, CFO, CFO YoY.
+- Balance-sheet rows: Total Assets, Equity, Current Assets, Current Liabilities, Net Current Assets.
+- Keep dividends in their dedicated table. The final corporate-actions table contains only non-dividend events such as bonus, split, and rights; render an explicit empty row when none are returned.
 - Color positive changes green, negative changes red, and zero neutral when ANSI output is available.
 - Monetary statement values are INR crore; per-share values use rupees.
 
 Architecture and tests:
 - Put data models, injected-request fetching, normalization, calculations, and rendering in `fundamentals.py`; do not expand `cli.py` with the dashboard implementation.
 - Track each real Upstox request in the standard per-command network footer.
-- Mock every network request in tests. Cover fixed request parameters, four-period normalization, derived formulas, sparse/malformed data, optional-price failure, company-only scope, rendering/color semantics, exact REPL routing, no-qualifier rejection, aliases, and situational help.
+- Mock every network request in tests. Cover fixed request parameters, four-period normalization, margin and valuation derivations, balance-sheet data, separated/final corporate actions, sparse/malformed data, optional-price failure, company-only scope, rendering/color semantics, exact REPL routing, no-qualifier rejection, aliases, and situational help.
 ```

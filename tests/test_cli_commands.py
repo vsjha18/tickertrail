@@ -28,6 +28,7 @@ class HelperBehaviorTests(unittest.TestCase):
         self.assertEqual(cli._fmt_change(None, None), "n/a")
         self.assertTrue(cli._fmt_compact_num(10_000).endswith("K"))
         self.assertIn("[", cli._range_line(10, 20, 15, width=12))
+        self.assertEqual(cli._range_line(10, 20, float("nan"), width=12), "[n/a]")
 
     def test_parser_build(self):
         p = cli._build_parser()
@@ -791,6 +792,41 @@ class RenderBehaviorTests(unittest.TestCase):
     def test_draw_chart_no_data(self, _mock_fetch):
         rc = cli._draw_chart("X", "1y", "1mo", 20, 100, info=None)
         self.assertEqual(rc, 3)
+
+    @patch("tickertrail.cli.plt")
+    @patch("tickertrail.cli._benchmark_symbol_for", return_value=(None, None))
+    @patch("tickertrail.cli._fetch_close_points_for_token")
+    def test_draw_chart_drops_non_finite_prices(self, mock_fetch, _mock_bench, mock_plt):
+        """Render from finite rows when Yahoo appends an interior or trailing NaN."""
+        points = [
+            dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc),
+            dt.datetime(2026, 1, 2, tzinfo=dt.timezone.utc),
+            dt.datetime(2026, 1, 3, tzinfo=dt.timezone.utc),
+            dt.datetime(2026, 1, 4, tzinfo=dt.timezone.utc),
+        ]
+        mock_fetch.return_value = (
+            points,
+            [100.0, float("nan"), 120.0, float("nan")],
+        )
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cli._draw_chart("HINDPETRO.NS", "6mo", "1d", 20, 100, info={})
+        self.assertEqual(rc, 0)
+        self.assertIn("Last: 120.00", out.getvalue())
+        self.assertIn("+20.00 (+20.00%)", out.getvalue())
+        self.assertNotIn("nan", out.getvalue().lower())
+        self.assertTrue(mock_plt.show.called)
+
+    @patch("tickertrail.cli._fetch_close_points_for_token")
+    def test_draw_chart_rejects_all_non_finite_prices(self, mock_fetch):
+        """Report missing history when every provider close is non-finite."""
+        mock_fetch.return_value = (
+            [dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)],
+            [float("nan")],
+        )
+        with patch("sys.stderr", new_callable=io.StringIO) as err:
+            rc = cli._draw_chart("HINDPETRO.NS", "6mo", "1d", 20, 100, info={})
+        self.assertEqual(rc, 3)
+        self.assertIn("No historical data", err.getvalue())
 
     @patch("tickertrail.cli.plt")
     @patch("tickertrail.cli._benchmark_symbol_for", return_value=(None, None))

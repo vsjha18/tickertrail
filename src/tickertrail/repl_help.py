@@ -482,7 +482,7 @@ def _command_entries(period_hint: str) -> dict[str, HelpEntry]:
             ("fundmentals",),
             (
                 "Show consolidated fundamentals for the active listed stock using Upstox.",
-                "Includes ratios, quarterly sales/PAT, annual PAT/CFO, shareholding, and dividends.",
+                "Includes quarterly margins, annual PAT/CFO, balance sheet, shareholding, dividends, and corporate actions.",
                 "PEG, book value/share, and trailing dividend yield are clearly marked as derived.",
                 "Available only from a stock prompt and accepts no qualifiers.",
             ),
