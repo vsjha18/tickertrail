@@ -53,7 +53,7 @@ uv run tickertrail
 - `cli.py`: entry point, compatibility adapters, and REPL controller orchestration
 - `command_parser.py`: typed, network-free command grammar shared by CLI entry points
 - `repl_help.py`: data-driven REPL overview, topic, command, and alias help
-- `upstox_service.py`: Upstox token persistence, option-chain grammar, API normalization, and ATM-window selection
+- `upstox_service.py`: Upstox token persistence, contract-calendar resolution, API normalization, and ATM-window selection
 - `index_config.py`: canonical index aliases, board membership, fetch mappings, and prompt labels
 - `price_history.py` / `snapshot_service.py`: reusable market-data services with injected network callbacks
 - `views.py` / `quote_tools.py`: presentation and quote analytics
@@ -418,9 +418,11 @@ Expiry qualifiers:
 - `month`: current monthly expiry
 - `expiry YYYY-MM-DD`: exact expiry date
 
+For relative qualifiers, TickerTrail first reads the current Upstox NIFTY contract calendar. `near`, `next`, and `far` select the first, second, and third actual listed expiries; `month` selects the first listed non-weekly expiry. This keeps the commands correct when the current calendar week has no remaining expiry or a monthly contract shares a weekly slot.
+
 The optional `strikes <1-25>` modifier controls how many strikes are shown on each side of ATM; the default is 10. The chain is ordered from higher strikes at the top to lower strikes at the bottom. Calls are on the left, puts on the right, and the strike spine is centered and bold. Headers and the complete ATM row are bold. Each call/put half is independently colored by its daily move, and LTP shows that move in brackets. Delta sits immediately next to LTP, followed by Vega, Gamma, Theta, IV, volume, and OI. The heading shows the current NIFTY value and its absolute and percentage move.
 
-Use `chain ?`, `oc ?`, or `help chain` for situational help. Upstox access is read-only in this feature; an expired or rejected token produces a configuration error instead of falling back to another data source.
+Use `chain ?`, `oc ?`, or `help chain` for situational help. Upstox access is read-only in this feature and never falls back to another data source. HTTP requests identify TickerTrail explicitly so Upstox's gateway does not reject Python's default client signature; API, authentication, and gateway errors remain distinct in CLI output.
 
 ## Charts and Tables
 

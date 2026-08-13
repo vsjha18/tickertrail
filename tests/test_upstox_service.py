@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import tempfile
@@ -78,12 +79,12 @@ class UpstoxServiceTests(unittest.TestCase):
     def test_parse_chain_args_supports_relative_exact_and_strike_forms(self):
         """Normalize all agreed expiry qualifiers and strike-count modifiers."""
         expected = {
-            (): ("near", "current_week", 10),
-            ("near",): ("near", "current_week", 10),
-            ("next",): ("next", "next_week", 10),
-            ("far",): ("far", "far_week", 10),
-            ("month",): ("month", "current_month", 10),
-            ("next", "strikes", "15"): ("next", "next_week", 15),
+            (): ("near", "near", 10),
+            ("near",): ("near", "near", 10),
+            ("next",): ("next", "next", 10),
+            ("far",): ("far", "far", 10),
+            ("month",): ("month", "month", 10),
+            ("next", "strikes", "15"): ("next", "next", 15),
             ("expiry", "2026-08-27", "strikes", "2"): ("expiry", "2026-08-27", 2),
         }
         for args, values in expected.items():
@@ -142,22 +143,115 @@ class UpstoxServiceTests(unittest.TestCase):
                 ],
             }
 
-        rows = service.fetch_option_chain("token", "current_week", fake_request)
+        rows = service.fetch_option_chain("token", "2026-08-20", fake_request)
 
         self.assertEqual([row.strike for row in rows], [24550.0, 24600.0])
         self.assertEqual(rows[1].call.delta, 0.52)
         self.assertEqual(rows[1].call.ltp, 151.8)
         self.assertIsNone(rows[1].put.ltp)
         self.assertEqual(calls[0][0], "/v2/option/chain")
-        self.assertEqual(calls[0][1]["expiry_date"], "current_week")
+        self.assertEqual(calls[0][1]["expiry_date"], "2026-08-20")
         self.assertEqual(calls[0][2], "token")
 
     def test_fetch_option_chain_rejects_missing_or_unusable_data(self):
         """Reject successful-looking responses that contain no usable strikes."""
         with self.assertRaisesRegex(service.UpstoxError, "no option-chain rows"):
-            service.fetch_option_chain("t", "current_week", lambda *_args: {})
+            service.fetch_option_chain("t", "2026-08-20", lambda *_args: {})
         with self.assertRaisesRegex(service.UpstoxError, "no usable"):
-            service.fetch_option_chain("t", "current_week", lambda *_args: {"data": [{"strike_price": None}]})
+            service.fetch_option_chain(
+                "t",
+                "2026-08-20",
+                lambda *_args: {"data": [{"strike_price": None}]},
+            )
+
+    def test_fetch_and_resolve_actual_nifty_expiries(self):
+        """Resolve relative qualifiers from live-contract dates rather than calendar keywords."""
+        calls: list[tuple[str, dict[str, str], str]] = []
+
+        def fake_request(endpoint, params, token):
+            """Return repeated contracts across weekly and monthly expiries."""
+            calls.append((endpoint, params, token))
+            return {
+                "data": [
+                    "bad",
+                    {"expiry": "invalid", "weekly": True},
+                    {"expiry": "2026-08-11", "weekly": True},
+                    {"expiry": "2026-08-18", "weekly": True},
+                    {"expiry": "2026-08-18", "weekly": True},
+                    {"expiry": "2026-08-25", "weekly": True},
+                    {"expiry": "2026-08-25", "weekly": False},
+                    {"expiry": "2026-09-01", "weekly": True},
+                ]
+            }
+
+        expiries = service.fetch_nifty_option_expiries(
+            "token", fake_request, as_of=dt.date(2026, 8, 13)
+        )
+        self.assertEqual(
+            expiries,
+            [
+                service.OptionExpiry("2026-08-18", True),
+                service.OptionExpiry("2026-08-25", False),
+                service.OptionExpiry("2026-09-01", True),
+            ],
+        )
+        self.assertEqual(
+            calls[0],
+            (
+                "/v2/option/contract",
+                {"instrument_key": service.NIFTY_INSTRUMENT_KEY},
+                "token",
+            ),
+        )
+        for qualifier, expected in (
+            ("near", "2026-08-18"),
+            ("next", "2026-08-25"),
+            ("far", "2026-09-01"),
+            ("month", "2026-08-25"),
+        ):
+            with self.subTest(qualifier=qualifier):
+                request = service.ChainRequest(qualifier, service.EXPIRY_QUALIFIERS[qualifier])
+                self.assertEqual(
+                    service.resolve_chain_expiry(
+                        "token", request, fake_request, as_of=dt.date(2026, 8, 13)
+                    ),
+                    expected,
+                )
+        exact = service.ChainRequest("expiry", "2026-08-27")
+        self.assertEqual(service.resolve_chain_expiry("token", exact), "2026-08-27")
+
+    def test_expiry_resolution_reports_unavailable_contracts(self):
+        """Return useful failures for missing positional and monthly expiries."""
+        with self.assertRaisesRegex(service.UpstoxError, "no NIFTY option contracts"):
+            service.fetch_nifty_option_expiries("t", lambda *_args: {})
+        with self.assertRaisesRegex(service.UpstoxError, "no current NIFTY"):
+            service.fetch_nifty_option_expiries(
+                "t", lambda *_args: {"data": [{"expiry": "bad"}]}
+            )
+        weekly_only = lambda *_args: {
+            "data": [{"expiry": "2026-08-18", "weekly": True}]
+        }
+        with self.assertRaisesRegex(service.UpstoxError, "No next"):
+            service.resolve_chain_expiry(
+                "t",
+                service.ChainRequest("next", "next"),
+                weekly_only,
+                as_of=dt.date(2026, 8, 13),
+            )
+        with self.assertRaisesRegex(service.UpstoxError, "No monthly"):
+            service.resolve_chain_expiry(
+                "t",
+                service.ChainRequest("month", "month"),
+                weekly_only,
+                as_of=dt.date(2026, 8, 13),
+            )
+        with self.assertRaisesRegex(service.UpstoxError, "Unsupported"):
+            service.resolve_chain_expiry(
+                "t",
+                service.ChainRequest("later", "later"),
+                weekly_only,
+                as_of=dt.date(2026, 8, 13),
+            )
 
     def test_fetch_nifty_quote_normalizes_first_quote_block(self):
         """Extract NIFTY LTP and previous close from a mocked V3 quote."""
@@ -190,6 +284,7 @@ class UpstoxServiceTests(unittest.TestCase):
         self.assertEqual(payload, {"status": "success"})
         request = mock_open.call_args.args[0]
         self.assertEqual(request.get_header("Authorization"), "Bearer abc")
+        self.assertEqual(request.get_header("User-agent"), service.USER_AGENT)
         self.assertIn("instrument_key=NSE_INDEX%7CNifty+50", request.full_url)
 
         error = HTTPError("https://x", 401, "bad", {}, _FakeResponse({"errors": [{"message": "Invalid token"}]}))
@@ -205,7 +300,7 @@ class UpstoxServiceTests(unittest.TestCase):
         cases = (
             (
                 HTTPError("https://x", 403, "bad", {}, _RawResponse(b"not-json")),
-                "rejected the configured analytics token",
+                "denied access",
             ),
             (
                 HTTPError("https://x", 429, "bad", {}, _FakeResponse({})),
@@ -214,6 +309,22 @@ class UpstoxServiceTests(unittest.TestCase):
             (
                 HTTPError("https://x", 400, "bad", {}, _FakeResponse({"message": "Bad request"})),
                 "Bad request",
+            ),
+            (
+                HTTPError(
+                    "https://x",
+                    403,
+                    "bad",
+                    {},
+                    _FakeResponse(
+                        {
+                            "cloudflare_error": True,
+                            "error_code": 1010,
+                            "detail": "The site owner blocked this browser signature.",
+                        }
+                    ),
+                ),
+                "gateway blocked.*1010.*browser signature",
             ),
         )
         for error, message in cases:

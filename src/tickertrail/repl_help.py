@@ -429,6 +429,7 @@ def _command_entries(period_hint: str) -> dict[str, HelpEntry]:
             (
                 "Show a descending NIFTY option-chain spine with calls and puts.",
                 "Includes LTP change, Delta, Gamma, Theta, Vega, IV, volume, and OI.",
+                "Relative qualifiers resolve against currently listed Upstox contract dates.",
                 "Requires an Upstox analytics token configured through config mode.",
             ),
             ("expiry: near", "strikes on each side of ATM: 10"),

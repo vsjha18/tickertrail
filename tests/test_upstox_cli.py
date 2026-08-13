@@ -103,10 +103,10 @@ class UpstoxCliTests(unittest.TestCase):
         """Accept contextual and one-shot NIFTY commands while rejecting other contexts."""
         contextual, error = cli._parse_nifty_chain_command(["next", "strikes", "3"], "^NSEI")
         self.assertIsNone(error)
-        self.assertEqual(contextual, service.ChainRequest("next", "next_week", 3))
+        self.assertEqual(contextual, service.ChainRequest("next", "next", 3))
         one_shot, error = cli._parse_nifty_chain_command(["nifty", "month"], None)
         self.assertIsNone(error)
-        self.assertEqual(one_shot, service.ChainRequest("month", "current_month", 10))
+        self.assertEqual(one_shot, service.ChainRequest("month", "month", 10))
         rejected, error = cli._parse_nifty_chain_command([], "AAPL")
         self.assertIsNone(rejected)
         self.assertIn("NIFTY only", error or "")
@@ -125,9 +125,9 @@ class UpstoxCliTests(unittest.TestCase):
         self.assertEqual(
             [call.args[0] for call in mock_chain.call_args_list],
             [
-                service.ChainRequest("near", "current_week", 10),
-                service.ChainRequest("next", "next_week", 3),
-                service.ChainRequest("far", "far_week", 10),
+                service.ChainRequest("near", "near", 10),
+                service.ChainRequest("next", "next", 3),
+                service.ChainRequest("far", "far", 10),
             ],
         )
         self.assertIn("Command: chain", out.getvalue())
@@ -142,7 +142,7 @@ class UpstoxCliTests(unittest.TestCase):
         ):
             rc = cli._run_repl(None, None, None, 100, 22)
         self.assertEqual(rc, 0)
-        mock_chain.assert_called_once_with(service.ChainRequest("month", "current_month", 10))
+        mock_chain.assert_called_once_with(service.ChainRequest("month", "month", 10))
         self.assertIn("NIFTY only", err.getvalue())
 
     def test_render_chain_has_descending_bold_spine_headers_and_atm_row(self):
@@ -152,7 +152,7 @@ class UpstoxCliTests(unittest.TestCase):
             patch("sys.stdout", new_callable=io.StringIO) as out,
         ):
             cli._render_nifty_option_chain(
-                service.ChainRequest("near", "current_week", 2),
+                service.ChainRequest("near", "near", 2),
                 _chain_rows(),
                 service.NiftyQuote(24590.0, 24460.0),
             )
@@ -179,7 +179,7 @@ class UpstoxCliTests(unittest.TestCase):
             rows[0].put,
         )
         with patch("sys.stdout", new_callable=io.StringIO) as out:
-            cli._render_nifty_option_chain(service.ChainRequest("far", "far_week", 1), rows, None)
+            cli._render_nifty_option_chain(service.ChainRequest("far", "far", 1), rows, None)
         self.assertIn("24,590.00  n/a", out.getvalue())
         self.assertIn("n/a", out.getvalue())
 
@@ -209,26 +209,31 @@ class UpstoxCliTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(service.UpstoxError, "no current NIFTY value"):
             cli._render_nifty_option_chain(
-                service.ChainRequest("near", "current_week", 10),
+                service.ChainRequest("near", "near", 10),
                 missing_spot_rows,
                 None,
             )
 
     def test_print_chain_fetches_quote_and_chain_with_spot_fallback(self):
         """Track both Upstox calls and tolerate a failed header quote."""
-        request = service.ChainRequest("near", "current_week", 2)
+        request = service.ChainRequest("near", "near", 2)
         with (
             patch("tickertrail.cli.upstox_service.load_analytics_token", return_value="token"),
             patch("tickertrail.cli.upstox_service.fetch_nifty_quote", side_effect=service.UpstoxError("quote down")),
+            patch("tickertrail.cli.upstox_service.resolve_chain_expiry", return_value="2026-08-18") as mock_expiry,
             patch("tickertrail.cli.upstox_service.fetch_option_chain", return_value=_chain_rows()) as mock_chain,
             patch("tickertrail.cli._render_nifty_option_chain") as mock_render,
         ):
             cli._reset_network_call_metrics()
             rc = cli._print_nifty_option_chain(request)
         self.assertEqual(rc, 0)
-        mock_chain.assert_called_once_with("token", "current_week")
+        mock_expiry.assert_called_once_with("token", request)
+        mock_chain.assert_called_once_with("token", "2026-08-18")
         mock_render.assert_called_once_with(request, unittest.mock.ANY, None)
-        self.assertEqual(cli._NETWORK_CALL_COUNTS, {"upstox.ltp": 1, "upstox.option_chain": 1})
+        self.assertEqual(
+            cli._NETWORK_CALL_COUNTS,
+            {"upstox.ltp": 1, "upstox.option_contract": 1, "upstox.option_chain": 1},
+        )
 
         with (
             patch("tickertrail.cli.upstox_service.load_analytics_token", side_effect=service.UpstoxError("missing")),
@@ -236,6 +241,25 @@ class UpstoxCliTests(unittest.TestCase):
         ):
             self.assertEqual(cli._print_nifty_option_chain(request), 3)
         self.assertIn("missing", err.getvalue())
+
+    def test_print_chain_exact_expiry_skips_contract_lookup(self):
+        """Use an explicit date directly without fetching the contract calendar."""
+        request = service.ChainRequest("expiry", "2026-08-27", 2)
+        with (
+            patch("tickertrail.cli.upstox_service.load_analytics_token", return_value="token"),
+            patch(
+                "tickertrail.cli.upstox_service.fetch_nifty_quote",
+                return_value=service.NiftyQuote(24590, 24500),
+            ),
+            patch("tickertrail.cli.upstox_service.resolve_chain_expiry") as mock_expiry,
+            patch("tickertrail.cli.upstox_service.fetch_option_chain", return_value=_chain_rows()) as mock_chain,
+            patch("tickertrail.cli._render_nifty_option_chain"),
+        ):
+            cli._reset_network_call_metrics()
+            self.assertEqual(cli._print_nifty_option_chain(request), 0)
+        mock_expiry.assert_not_called()
+        mock_chain.assert_called_once_with("token", "2026-08-27")
+        self.assertEqual(cli._NETWORK_CALL_COUNTS, {"upstox.ltp": 1, "upstox.option_chain": 1})
 
 
 if __name__ == "__main__":

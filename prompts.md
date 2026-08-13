@@ -165,7 +165,7 @@ Design a small architecture for tickertrail with clear separation:
 - Keep historical close-series retrieval in a reusable module (for example `price_history.py`) with injected downloader/telemetry callbacks so non-CLI workflows can reuse it and tests can stub network cleanly.
 - Keep quote/rebased/compare presentation logic in a reusable views module (for example `views.py`) and let `cli.py` call it as an adapter layer.
 - Keep grouped snapshot/day-range enrichment logic in a reusable service module (for example `snapshot_service.py`) with injected fetch/progress callbacks so index/snap features are reusable outside REPL.
-- Keep Upstox token persistence, HTTP normalization, option-chain parsing, and ATM-window selection in `upstox_service.py`; allow injected request callbacks so tests never use the live API.
+- Keep Upstox token persistence, HTTP normalization, contract-calendar expiry resolution, option-chain parsing, and ATM-window selection in `upstox_service.py`; allow injected request callbacks so tests never use the live API.
 - Keep canonical index aliases, board membership, Yahoo fetch mappings, expected constituent counts, and prompt labels in `index_config.py`; `cli.py` may expose compatibility aliases but should not duplicate the configuration.
 
 3) Render layer
@@ -702,13 +702,14 @@ Chain grammar:
 - NIFTY context exact date: `chain|oc expiry YYYY-MM-DD [strikes <1-25>]`.
 - Other contexts: require `chain|oc nifty ...` so intent is explicit.
 - Defaults: `near`, 10 strikes below and 10 strikes above ATM.
-- Relative Upstox expiry mapping: `near=current_week`, `next=next_week`, `far=far_week`, `month=current_month`.
+- Resolve relative commands from `/v2/option/contract` without an expiry filter: `near`, `next`, and `far` are the first three actual future expiry dates; `month` is the first future contract date marked non-weekly. Do not send static relative keywords directly to the chain endpoint because a calendar week with no remaining expiry can return an empty chain.
 
 API/data boundaries:
 - Fetch the chain from `/v2/option/chain` using `NSE_INDEX|Nifty 50` and the selected expiry value.
+- Send an explicit stable TickerTrail `User-Agent` on every HTTP request so gateway policy does not classify the default Python urllib signature as banned.
 - Fetch NIFTY LTP/previous close from `/v3/market-quote/ltp`; if this header quote fails but the chain has an underlying spot, render using that spot.
 - Never silently switch the chain to Yahoo or another provider.
-- Normalize malformed/missing scalar fields to `n/a` and return concise safe errors for network, token, and response failures.
+- Normalize malformed/missing scalar fields to `n/a` and return concise safe errors for network, token, gateway, and response failures. Preserve Cloudflare/gateway details from structured error payloads; never label every HTTP 403 as a rejected token.
 
 Rendering contract:
 - Top line: NIFTY value plus signed absolute and percentage daily move.
@@ -722,5 +723,5 @@ Rendering contract:
 
 Testing:
 - Mock every Upstox request; unit tests must make no live network calls.
-- Cover every qualifier, exact-date and strike-count validation, token persistence/errors, response normalization, quote fallback, command routing/help, and ANSI rendering semantics.
+- Cover every qualifier, actual-contract expiry selection, exact-date and strike-count validation, request identity, token/gateway errors, response normalization, quote fallback, command routing/help, and ANSI rendering semantics.
 ```

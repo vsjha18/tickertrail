@@ -2624,8 +2624,14 @@ def _print_nifty_option_chain(request: upstox_service.ChainRequest) -> int:
         except upstox_service.UpstoxError:
             # A missing quote must not hide a usable chain; its embedded spot is the fallback.
             quote = None
+        if request.qualifier == "expiry":
+            resolved_expiry = request.expiry_value
+        else:
+            # Relative commands follow the actual contract calendar, including monthly collisions.
+            _track_network_call("upstox.option_contract")
+            resolved_expiry = upstox_service.resolve_chain_expiry(token, request)
         _track_network_call("upstox.option_chain")
-        rows = upstox_service.fetch_option_chain(token, request.expiry_value)
+        rows = upstox_service.fetch_option_chain(token, resolved_expiry)
         _render_nifty_option_chain(request, rows, quote)
     except upstox_service.UpstoxError as exc:
         print(str(exc), file=sys.stderr)

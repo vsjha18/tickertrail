@@ -9,15 +9,17 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 
 NIFTY_INSTRUMENT_KEY = "NSE_INDEX|Nifty 50"
 TOKEN_FILE = Path(__file__).resolve().parents[2] / ".upstox_analytics_token"
+USER_AGENT = "TickerTrail/0.1 (+https://github.com/vsjha18/tickertrail)"
 EXPIRY_QUALIFIERS = {
-    "near": "current_week",
-    "next": "next_week",
-    "far": "far_week",
-    "month": "current_month",
+    "near": "near",
+    "next": "next",
+    "far": "far",
+    "month": "month",
 }
 CHAIN_USAGE = "chain [near|next|far|month|expiry YYYY-MM-DD] [strikes <1-25>]"
 
@@ -67,6 +69,14 @@ class NiftyQuote:
 
     last_price: float | None
     close_price: float | None
+
+
+@dataclass(frozen=True)
+class OptionExpiry:
+    """Describe one available NIFTY expiry and whether it is weekly."""
+
+    expiry: str
+    weekly: bool
 
 
 JsonRequest = Callable[[str, dict[str, str], str], dict[str, Any]]
@@ -168,6 +178,12 @@ def _float_or_none(value: Any) -> float | None:
 def _api_error_message(payload: Any, status_code: int) -> str:
     """Extract a safe message from one Upstox error payload."""
     if isinstance(payload, dict):
+        # Cloudflare failures happen before Upstox authentication and must not be called token failures.
+        if payload.get("cloudflare_error"):
+            detail = str(payload.get("detail") or payload.get("title") or "Access denied").strip()
+            error_code = str(payload.get("error_code") or "").strip()
+            suffix = f" ({error_code})" if error_code else ""
+            return f"Upstox gateway blocked the request{suffix}: {detail}"
         errors = payload.get("errors")
         if isinstance(errors, list) and errors and isinstance(errors[0], dict):
             message = str(errors[0].get("message") or "").strip()
@@ -176,8 +192,10 @@ def _api_error_message(payload: Any, status_code: int) -> str:
         message = str(payload.get("message") or "").strip()
         if message:
             return message
-    if status_code in {401, 403}:
+    if status_code == 401:
         return "Upstox rejected the configured analytics token."
+    if status_code == 403:
+        return "Upstox denied access to this request (HTTP 403)."
     return f"Upstox request failed with HTTP {status_code}."
 
 
@@ -189,6 +207,8 @@ def request_json(endpoint: str, params: dict[str, str], token: str) -> dict[str,
         headers={
             "Accept": "application/json",
             "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
         },
         method="GET",
     )
@@ -262,6 +282,70 @@ def fetch_option_chain(
     if not rows:
         raise UpstoxError("Upstox returned no usable option-chain rows.")
     return sorted(rows, key=lambda row: row.strike)
+
+
+def fetch_nifty_option_expiries(
+    token: str,
+    request_json_fn: JsonRequest | None = None,
+    as_of: dt.date | None = None,
+) -> list[OptionExpiry]:
+    """Fetch, de-duplicate, and sort currently available NIFTY expiries."""
+    fetch = request_json_fn or request_json
+    payload = fetch(
+        "/v2/option/contract",
+        {"instrument_key": NIFTY_INSTRUMENT_KEY},
+        token,
+    )
+    raw_rows = payload.get("data")
+    if not isinstance(raw_rows, list):
+        raise UpstoxError("Upstox returned no NIFTY option contracts.")
+    current_date = as_of or dt.datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    weekly_by_expiry: dict[str, bool] = {}
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, dict):
+            continue
+        raw_expiry = str(raw_row.get("expiry") or "").strip()
+        try:
+            expiry_date = dt.date.fromisoformat(raw_expiry)
+        except ValueError:
+            continue
+        if expiry_date < current_date:
+            continue
+        weekly = bool(raw_row.get("weekly"))
+        # If either contract classification is monthly, preserve the monthly designation.
+        weekly_by_expiry[raw_expiry] = weekly_by_expiry.get(raw_expiry, True) and weekly
+    if not weekly_by_expiry:
+        raise UpstoxError("Upstox returned no current NIFTY option expiries.")
+    return [
+        OptionExpiry(expiry, weekly_by_expiry[expiry])
+        for expiry in sorted(weekly_by_expiry)
+    ]
+
+
+def resolve_chain_expiry(
+    token: str,
+    request: ChainRequest,
+    request_json_fn: JsonRequest | None = None,
+    as_of: dt.date | None = None,
+) -> str:
+    """Resolve a chain qualifier against actual available NIFTY contracts."""
+    if request.qualifier == "expiry":
+        return request.expiry_value
+    expiries = fetch_nifty_option_expiries(token, request_json_fn, as_of)
+
+    # Positional qualifiers describe the next three listed expiries, independent of calendar gaps.
+    qualifier_index = {"near": 0, "next": 1, "far": 2}
+    if request.qualifier in qualifier_index:
+        index = qualifier_index[request.qualifier]
+        if index >= len(expiries):
+            raise UpstoxError(f"No {request.qualifier} NIFTY option expiry is currently available.")
+        return expiries[index].expiry
+    if request.qualifier == "month":
+        monthly = next((item for item in expiries if not item.weekly), None)
+        if monthly is None:
+            raise UpstoxError("No monthly NIFTY option expiry is currently available.")
+        return monthly.expiry
+    raise UpstoxError(f"Unsupported NIFTY expiry qualifier '{request.qualifier}'.")
 
 
 def fetch_nifty_quote(
