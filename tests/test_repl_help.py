@@ -73,7 +73,8 @@ class ReplHelpTests(unittest.TestCase):
 
         with patch("sys.stdout", new_callable=io.StringIO) as stock_out:
             repl_help.print_stage_help("stock", "stock: infy")
-        self.assertIn("chain nifty [qualifier]", stock_out.getvalue())
+        self.assertIn("chain | oc [qualifier]", stock_out.getvalue())
+        self.assertIn("chain <symbol|index>", stock_out.getvalue())
         self.assertIn("show token [upstox]", stock_out.getvalue())
 
 

@@ -110,6 +110,14 @@ class _LastViewState:
     symbols: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class _OptionChainTarget:
+    """Describe an Upstox lookup query and its preferred Indian exchange."""
+
+    query: str
+    preferred_exchange: str = "NSE"
+
+
 @dataclass
 class _ReplContext:
     """Mutable REPL context for active symbol, prompt label, and watchlist mode."""
@@ -2458,22 +2466,75 @@ def _print_token_status() -> None:
     print(f"Token file: {path}")
 
 
-def _parse_nifty_chain_command(
+def _option_chain_target(symbol_input: str) -> _OptionChainTarget:
+    """Translate a TickerTrail stock/index token into an Upstox search query."""
+    raw = symbol_input.strip()
+    upper = raw.upper()
+    preferred_exchange = "BSE" if upper.endswith(".BO") else "NSE"
+
+    # Reuse configured index aliases so contextual and explicit commands resolve identically.
+    canonical = _INDEX_ALIASES.get(upper, _normalize_snap_index_symbol(upper))
+    upstox_index_overrides = {
+        "^BSESN": _OptionChainTarget("SENSEX", "BSE"),
+        "^NSEMDCP50": _OptionChainTarget("NIFTY MID SELECT", "NSE"),
+    }
+    if canonical in upstox_index_overrides:
+        return upstox_index_overrides[canonical]
+    if canonical in _INDEX_BOARD_SYMBOLS:
+        return _OptionChainTarget(_index_label_for_symbol(canonical), preferred_exchange)
+    if upper.startswith("^"):
+        return _OptionChainTarget(upper[1:], preferred_exchange)
+    if upper.endswith((".NS", ".BO")):
+        upper = upper.rsplit(".", 1)[0]
+    return _OptionChainTarget(upper, preferred_exchange)
+
+
+def _parse_chain_command(
     args: list[str],
     current_symbol: str | None,
-) -> tuple[upstox_service.ChainRequest | None, str | None]:
-    """Resolve NIFTY context and parse one option-chain command tail."""
+) -> tuple[_OptionChainTarget | None, upstox_service.ChainRequest | None, str | None]:
+    """Resolve a contextual or explicit option-chain target and parse modifiers."""
     tokens = list(args)
-    if tokens and tokens[0].lower() == "nifty":
-        tokens.pop(0)
-    elif _normalize_snap_index_symbol(current_symbol or "") != "^NSEI":
-        return None, "`chain` currently supports NIFTY only. Enter `nifty` or use `chain nifty`."
-    return upstox_service.parse_chain_args(tokens)
+    modifiers = {*upstox_service.EXPIRY_QUALIFIERS, "expiry", "strikes"}
+
+    # A modifier-first command uses the active prompt; otherwise the first token is the target.
+    if current_symbol and (not tokens or tokens[0].lower() in modifiers):
+        target_input = current_symbol
+    elif tokens and tokens[0].lower() in modifiers:
+        return None, None, "No active stock or index. Usage: chain <symbol|index> [qualifier]"
+    elif tokens:
+        target_input = tokens.pop(0)
+    else:
+        return None, None, "No active stock or index. Usage: chain <symbol|index> [qualifier]"
+    request, error = upstox_service.parse_chain_args(tokens)
+    if error:
+        return None, None, error
+    return _option_chain_target(target_input), request, None
 
 
 def _format_chain_scalar(value: float | None, precision: int) -> str:
-    """Format one option-chain numeric value with fixed precision."""
-    return "n/a" if value is None else f"{value:.{precision}f}"
+    """Format one option-chain scalar without overflowing its seven-character cell."""
+    if value is None:
+        return "n/a"
+    fixed = f"{value:.{precision}f}"
+    if len(fixed) <= 7:
+        return fixed
+
+    # Expiry-day Greeks can be unusually large, so compact them before scientific fallback.
+    magnitude = abs(value)
+    for divisor, suffix in (
+        (1_000_000_000_000, "T"),
+        (1_000_000_000, "B"),
+        (1_000_000, "M"),
+        (1_000, "K"),
+    ):
+        if magnitude < divisor:
+            continue
+        for decimals in (2, 1, 0):
+            compact = f"{value / divisor:.{decimals}f}{suffix}"
+            if len(compact) <= 7:
+                return compact
+    return f"{value:.0e}"
 
 
 def _format_chain_expiry_label(value: str) -> str:
@@ -2531,16 +2592,17 @@ def _format_put_chain_cells(side: upstox_service.OptionSide) -> str:
     )
 
 
-def _render_nifty_option_chain(
+def _render_option_chain(
     request: upstox_service.ChainRequest,
     rows: list[upstox_service.OptionChainRow],
-    quote: upstox_service.NiftyQuote | None,
+    quote: upstox_service.UnderlyingQuote | None,
+    display_name: str,
 ) -> None:
-    """Render a descending NIFTY option-chain table with coloured Greeks."""
+    """Render a descending stock or index option-chain table with coloured Greeks."""
     chain_spot = next((row.spot for row in rows if row.spot is not None), None)
     current_value = quote.last_price if quote is not None and quote.last_price is not None else chain_spot
     if current_value is None:
-        raise upstox_service.UpstoxError("Upstox returned no current NIFTY value.")
+        raise upstox_service.UpstoxError(f"Upstox returned no current {display_name} value.")
     selected, atm_strike = upstox_service.window_around_atm(rows, current_value, request.strikes_each_side)
     expiry = _format_chain_expiry_label(
         next((row.expiry for row in selected if row.expiry != "n/a"), "n/a")
@@ -2551,18 +2613,18 @@ def _render_nifty_option_chain(
     change = None if previous_close in {None, 0.0} else current_value - previous_close
     pct = None if change is None else (change / previous_close) * 100
     if change is None or pct is None:
-        nifty_move = "n/a"
-        nifty_color = "gray"
+        underlying_move = "n/a"
+        underlying_color = "gray"
         arrow = ""
     else:
-        nifty_move = f"{change:+,.2f} ({pct:+.2f}%)"
-        nifty_color = _color_by_sign(change)
+        underlying_move = f"{change:+,.2f} ({pct:+.2f}%)"
+        underlying_color = _color_by_sign(change)
         arrow = " ↑" if change > 0 else " ↓" if change < 0 else ""
 
     print()
     print(
-        f"{_style_text('NIFTY 50', bold=True)}  "
-        f"{_style_text(f'{current_value:,.2f}  {nifty_move}{arrow}', color=nifty_color, bold=True)}"
+        f"{_style_text(display_name.upper(), bold=True)}  "
+        f"{_style_text(f'{current_value:,.2f}  {underlying_move}{arrow}', color=underlying_color, bold=True)}"
     )
     print(
         _style_text(
@@ -2603,26 +2665,46 @@ def _render_nifty_option_chain(
         print(f"{left} │ {spine} │ {right}")
 
 
-def _print_nifty_option_chain(request: upstox_service.ChainRequest) -> int:
-    """Load the Upstox token, fetch NIFTY data, and render the option chain."""
+def _print_option_chain(
+    target: _OptionChainTarget,
+    request: upstox_service.ChainRequest,
+) -> int:
+    """Resolve an F&O underlying, fetch its Upstox data, and render its chain."""
     try:
         token = upstox_service.load_analytics_token()
-        quote: upstox_service.NiftyQuote | None = None
+        _track_network_call("upstox.instrument_search")
+        underlying = upstox_service.resolve_option_underlying(
+            token,
+            target.query,
+            preferred_exchange=target.preferred_exchange,
+        )
+
+        # Contract discovery both validates F&O eligibility and resolves every expiry form.
+        _track_network_call("upstox.option_contract")
+        resolved_expiry = upstox_service.resolve_chain_expiry(
+            token,
+            request,
+            underlying.instrument_key,
+            underlying.display_name,
+        )
+        quote: upstox_service.UnderlyingQuote | None = None
         try:
             _track_network_call("upstox.ltp")
-            quote = upstox_service.fetch_nifty_quote(token)
+            quote = upstox_service.fetch_underlying_quote(
+                token,
+                underlying.instrument_key,
+                underlying.display_name,
+            )
         except upstox_service.UpstoxError:
             # A missing quote must not hide a usable chain; its embedded spot is the fallback.
             quote = None
-        if request.qualifier == "expiry":
-            resolved_expiry = request.expiry_value
-        else:
-            # Relative commands follow the actual contract calendar, including monthly collisions.
-            _track_network_call("upstox.option_contract")
-            resolved_expiry = upstox_service.resolve_chain_expiry(token, request)
         _track_network_call("upstox.option_chain")
-        rows = upstox_service.fetch_option_chain(token, resolved_expiry)
-        _render_nifty_option_chain(request, rows, quote)
+        rows = upstox_service.fetch_option_chain(
+            token,
+            resolved_expiry,
+            instrument_key=underlying.instrument_key,
+        )
+        _render_option_chain(request, rows, quote, underlying.display_name)
     except upstox_service.UpstoxError as exc:
         print(str(exc), file=sys.stderr)
         return 3
@@ -3601,12 +3683,13 @@ def _run_repl(
                 continue
             if lower == "chain" or lower.startswith("chain ") or lower == "oc" or lower.startswith("oc "):
                 parts = cmd.split()
-                chain_request, parse_error = _parse_nifty_chain_command(parts[1:], context.symbol)
+                chain_target, chain_request, parse_error = _parse_chain_command(parts[1:], context.symbol)
                 if parse_error:
                     print(parse_error, file=sys.stderr)
                     continue
+                assert chain_target is not None
                 assert chain_request is not None
-                _print_nifty_option_chain(chain_request)
+                _print_option_chain(chain_target, chain_request)
                 continue
             if lower == "move" or lower.startswith("move ") or lower == "moves" or lower.startswith("moves "):
                 parts = cmd.split()

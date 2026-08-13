@@ -44,7 +44,7 @@ uv run tickertrail
 - View swing and intraday charts in terminal
 - Compare stocks vs benchmark (`cmp`, `t`, `tt`)
 - Open index boards and constituent snapshots (`index`, `snap`)
-- Inspect a NIFTY option chain with live Upstox prices and Greeks (`chain` / `oc`)
+- Inspect stock and index F&O chains with live Upstox prices and Greeks (`chain` / `oc`)
 - Build and manage persistent watchlists
 - Run analytics boards (`move`, `trend`, `relret`/`rr`, `corr`)
 
@@ -108,7 +108,7 @@ Many commands are context-sensitive. You usually do not need arguments.
   - `trend` runs over index constituents when available.
   - `relret` runs over index constituents with an index-appropriate benchmark.
   - `corr` runs over index constituents and needs at least two valid overlapping series.
-- In NIFTY mode, `chain` / `oc` shows the selected NIFTY option expiry.
+- In any Indian stock/index mode, `chain` / `oc` shows its option chain when Upstox lists F&O contracts.
 
 ### 3) Watchlist mode (`tt>watchlist>sharekhan>`)
 
@@ -383,7 +383,7 @@ Final           118.48      126.02      122.63
 - `index list`: supported index catalog
 - `snap`: snapshot for active index/watchlist context
 
-## NIFTY Option Chain (Upstox)
+## Stock and Index Option Chains (Upstox)
 
 Configure the Upstox analytics token once from the REPL:
 
@@ -397,7 +397,7 @@ Upstox analytics token: configured
 Token file: .../.upstox_analytics_token
 ```
 
-Then enter NIFTY context and request the chain:
+Then enter any Indian F&O stock/index context and request its chain:
 
 ```text
 tt> nifty
@@ -406,21 +406,24 @@ tt>index>nifty> chain next
 tt>index>nifty> chain far strikes 15
 tt>index>nifty> chain month
 tt>index>nifty> chain expiry 2026-08-27 strikes 10
+tt> reliance
+tt>stock>reliance> chain next
+tt>stock>reliance> chain month strikes 15
 ```
 
-From any non-NIFTY prompt, use the explicit form `chain nifty ...`. `oc` is an alias for `chain`.
+The bare form uses the active stock or index. From any prompt, the explicit form accepts a stock ticker or index alias, for example `chain reliance next`, `chain bank month`, or `chain sensex`. `oc` is an alias for `chain`. TickerTrail resolves an exact NSE/BSE stock or index through Upstox and then checks its current option contracts; a cash-only symbol fails cleanly instead of showing an unrelated fuzzy match.
 
 Expiry qualifiers:
 
-- `near`: immediate weekly expiry and the default
-- `next`: following weekly expiry
-- `far`: weekly expiry after `next`
-- `month`: current monthly expiry
+- `near`: first listed future expiry and the default
+- `next`: second listed future expiry
+- `far`: third listed future expiry
+- `month`: first listed non-weekly expiry
 - `expiry YYYY-MM-DD`: exact expiry date
 
-For relative qualifiers, TickerTrail first reads the current Upstox NIFTY contract calendar. `near`, `next`, and `far` select the first, second, and third actual listed expiries; `month` selects the first listed non-weekly expiry. This keeps the commands correct when the current calendar week has no remaining expiry or a monthly contract shares a weekly slot.
+For every qualifier—including an exact date—TickerTrail first reads the selected underlying's current Upstox contract calendar. This both verifies that the stock/index is an F&O underlying and keeps expiry selection correct across weekly indices, monthly-only indices, and monthly stock options. An exact date must be present in that contract calendar.
 
-The optional `strikes <1-25>` modifier controls how many strikes are shown on each side of ATM; the default is 10. The chain is ordered from higher strikes at the top to lower strikes at the bottom. Calls are on the left, puts on the right, and the strike spine is centered and bold. Headers and the complete ATM row are bold. Each call/put half is independently colored by its daily move, and LTP shows that move in brackets. The compact table shows LTP, Delta immediately beside it, Theta, volume, and OI; IV, Gamma, and Vega are omitted so the table fits within 120 columns for typical values. The heading shows the current NIFTY value and its absolute and percentage move.
+The optional `strikes <1-25>` modifier controls how many strikes are shown on each side of ATM; the default is 10. The chain is ordered from higher strikes at the top to lower strikes at the bottom. Calls are on the left, puts on the right, and the strike spine is centered and bold. Headers and the complete ATM row are bold. Each call/put half is independently colored by its daily move, and LTP shows that move in brackets. The compact table shows LTP, Delta immediately beside it, Theta, volume, and OI; IV, Gamma, and Vega are omitted so the table fits within 120 columns for typical values. The heading shows the selected underlying's current value and its absolute and percentage move.
 
 Use `chain ?`, `oc ?`, or `help chain` for situational help. Upstox access is read-only in this feature and never falls back to another data source. HTTP requests identify TickerTrail explicitly so Upstox's gateway does not reject Python's default client signature; API, authentication, and gateway errors remain distinct in CLI output.
 

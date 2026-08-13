@@ -99,20 +99,31 @@ class UpstoxCliTests(unittest.TestCase):
         prompts = [call.args[0] for call in mock_input.call_args_list]
         self.assertEqual(prompts[-1], "tt> ")
 
-    def test_chain_parser_resolves_nifty_context_and_root_override(self):
-        """Accept contextual and one-shot NIFTY commands while rejecting other contexts."""
-        contextual, error = cli._parse_nifty_chain_command(["next", "strikes", "3"], "^NSEI")
+    def test_chain_parser_resolves_contextual_and_explicit_underlyings(self):
+        """Accept stock/index context and explicit one-shot F&O targets."""
+        target, contextual, error = cli._parse_chain_command(["next", "strikes", "3"], "RELIANCE.NS")
         self.assertIsNone(error)
+        self.assertEqual(target, cli._OptionChainTarget("RELIANCE", "NSE"))
         self.assertEqual(contextual, service.ChainRequest("next", "next", 3))
-        one_shot, error = cli._parse_nifty_chain_command(["nifty", "month"], None)
+        target, one_shot, error = cli._parse_chain_command(["bank", "month"], None)
         self.assertIsNone(error)
+        self.assertEqual(target, cli._OptionChainTarget("NIFTY BANK", "NSE"))
         self.assertEqual(one_shot, service.ChainRequest("month", "month", 10))
-        rejected, error = cli._parse_nifty_chain_command([], "AAPL")
+        target, contextual, error = cli._parse_chain_command([], "^BSESN")
+        self.assertIsNone(error)
+        self.assertEqual(target, cli._OptionChainTarget("SENSEX", "BSE"))
+        self.assertEqual(contextual, service.ChainRequest("near", "near", 10))
+        target, one_shot, error = cli._parse_chain_command(["midcapselect"], None)
+        self.assertIsNone(error)
+        self.assertEqual(target, cli._OptionChainTarget("NIFTY MID SELECT", "NSE"))
+        self.assertEqual(one_shot, service.ChainRequest("near", "near", 10))
+        target, rejected, error = cli._parse_chain_command(["next"], None)
+        self.assertIsNone(target)
         self.assertIsNone(rejected)
-        self.assertIn("NIFTY only", error or "")
+        self.assertIn("No active stock or index", error or "")
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
-    @patch("tickertrail.cli._print_nifty_option_chain", return_value=0)
+    @patch("tickertrail.cli._print_option_chain", return_value=0)
     @patch("tickertrail.cli._print_quote", return_value=0)
     def test_repl_routes_chain_alias_qualifiers_and_help(self, _mock_quote, mock_chain, _mock_hist):
         """Dispatch contextual chain variants without resolving new symbols."""
@@ -123,27 +134,33 @@ class UpstoxCliTests(unittest.TestCase):
             rc = cli._run_repl("nifty", "^NSEI", {"regularMarketPrice": 1.0}, 100, 22)
         self.assertEqual(rc, 0)
         self.assertEqual(
-            [call.args[0] for call in mock_chain.call_args_list],
+            [call.args for call in mock_chain.call_args_list],
             [
-                service.ChainRequest("near", "near", 10),
-                service.ChainRequest("next", "next", 3),
-                service.ChainRequest("far", "far", 10),
+                (cli._OptionChainTarget("NIFTY 50", "NSE"), service.ChainRequest("near", "near", 10)),
+                (cli._OptionChainTarget("NIFTY 50", "NSE"), service.ChainRequest("next", "next", 3)),
+                (cli._OptionChainTarget("NIFTY 50", "NSE"), service.ChainRequest("far", "far", 10)),
             ],
         )
         self.assertIn("Command: chain", out.getvalue())
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
-    @patch("tickertrail.cli._print_nifty_option_chain", return_value=0)
-    def test_repl_routes_root_chain_nifty_and_rejects_non_nifty(self, mock_chain, _mock_hist):
-        """Support a root one-shot command and keep failures network-free."""
+    @patch("tickertrail.cli._print_option_chain", return_value=0)
+    def test_repl_routes_root_chain_targets_and_requires_an_explicit_target(self, mock_chain, _mock_hist):
+        """Route root stock/index targets and reject a missing target without networking."""
         with (
-            patch("builtins.input", side_effect=["chain", "chain nifty month", "exit"]),
+            patch("builtins.input", side_effect=["chain", "chain nifty month", "chain reliance next", "exit"]),
             patch("sys.stderr", new_callable=io.StringIO) as err,
         ):
             rc = cli._run_repl(None, None, None, 100, 22)
         self.assertEqual(rc, 0)
-        mock_chain.assert_called_once_with(service.ChainRequest("month", "month", 10))
-        self.assertIn("NIFTY only", err.getvalue())
+        self.assertEqual(
+            [call.args for call in mock_chain.call_args_list],
+            [
+                (cli._OptionChainTarget("NIFTY 50", "NSE"), service.ChainRequest("month", "month", 10)),
+                (cli._OptionChainTarget("RELIANCE", "NSE"), service.ChainRequest("next", "next", 10)),
+            ],
+        )
+        self.assertIn("No active stock or index", err.getvalue())
 
     def test_render_chain_has_descending_bold_spine_headers_and_atm_row(self):
         """Render bold headers/spine/ATM with independent option-side colours."""
@@ -151,10 +168,11 @@ class UpstoxCliTests(unittest.TestCase):
             patch("tickertrail.cli._supports_color", return_value=True),
             patch("sys.stdout", new_callable=io.StringIO) as out,
         ):
-            cli._render_nifty_option_chain(
+            cli._render_option_chain(
                 service.ChainRequest("near", "near", 2),
                 _chain_rows(),
                 service.NiftyQuote(24590.0, 24460.0),
+                "Nifty 50",
             )
         rendered = out.getvalue()
         plain = cli._ANSI_ESCAPE_RE.sub("", rendered)
@@ -184,13 +202,17 @@ class UpstoxCliTests(unittest.TestCase):
             rows[0].put,
         )
         with patch("sys.stdout", new_callable=io.StringIO) as out:
-            cli._render_nifty_option_chain(service.ChainRequest("far", "far", 1), rows, None)
+            cli._render_option_chain(
+                service.ChainRequest("far", "far", 1), rows, None, "Nifty 50"
+            )
         self.assertIn("24,590.00  n/a", out.getvalue())
         self.assertIn("n/a", out.getvalue())
 
     def test_chain_expiry_label_preserves_non_iso_values(self):
         """Keep an unexpected expiry readable instead of failing rendering."""
         self.assertEqual(cli._format_chain_expiry_label("n/a"), "n/a")
+        self.assertEqual(cli._format_chain_scalar(-829957.89, 2), "-830.0K")
+        self.assertLessEqual(len(cli._format_chain_scalar(1e18, 2)), 7)
 
     def test_chain_helpers_handle_missing_values_and_token_save_error(self):
         """Render absent market fields safely and surface token persistence errors."""
@@ -212,59 +234,94 @@ class UpstoxCliTests(unittest.TestCase):
         missing_spot_rows = [
             service.OptionChainRow(24600.0, "2026-08-20", None, empty, empty)
         ]
-        with self.assertRaisesRegex(service.UpstoxError, "no current NIFTY value"):
-            cli._render_nifty_option_chain(
+        with self.assertRaisesRegex(service.UpstoxError, "no current RELIANCE value"):
+            cli._render_option_chain(
                 service.ChainRequest("near", "near", 10),
                 missing_spot_rows,
                 None,
+                "RELIANCE",
             )
 
     def test_print_chain_fetches_quote_and_chain_with_spot_fallback(self):
         """Track both Upstox calls and tolerate a failed header quote."""
         request = service.ChainRequest("near", "near", 2)
+        target = cli._OptionChainTarget("RELIANCE", "NSE")
+        underlying = service.OptionUnderlying(
+            "NSE_EQ|INE002A01018", "RELIANCE", "RELIANCE", "NSE_EQ"
+        )
         with (
             patch("tickertrail.cli.upstox_service.load_analytics_token", return_value="token"),
-            patch("tickertrail.cli.upstox_service.fetch_nifty_quote", side_effect=service.UpstoxError("quote down")),
+            patch("tickertrail.cli.upstox_service.resolve_option_underlying", return_value=underlying) as mock_underlying,
+            patch("tickertrail.cli.upstox_service.fetch_underlying_quote", side_effect=service.UpstoxError("quote down")),
             patch("tickertrail.cli.upstox_service.resolve_chain_expiry", return_value="2026-08-18") as mock_expiry,
             patch("tickertrail.cli.upstox_service.fetch_option_chain", return_value=_chain_rows()) as mock_chain,
-            patch("tickertrail.cli._render_nifty_option_chain") as mock_render,
+            patch("tickertrail.cli._render_option_chain") as mock_render,
         ):
             cli._reset_network_call_metrics()
-            rc = cli._print_nifty_option_chain(request)
+            rc = cli._print_option_chain(target, request)
         self.assertEqual(rc, 0)
-        mock_expiry.assert_called_once_with("token", request)
-        mock_chain.assert_called_once_with("token", "2026-08-18")
-        mock_render.assert_called_once_with(request, unittest.mock.ANY, None)
+        mock_underlying.assert_called_once_with(
+            "token", "RELIANCE", preferred_exchange="NSE"
+        )
+        mock_expiry.assert_called_once_with(
+            "token", request, "NSE_EQ|INE002A01018", "RELIANCE"
+        )
+        mock_chain.assert_called_once_with(
+            "token", "2026-08-18", instrument_key="NSE_EQ|INE002A01018"
+        )
+        mock_render.assert_called_once_with(request, unittest.mock.ANY, None, "RELIANCE")
         self.assertEqual(
             cli._NETWORK_CALL_COUNTS,
-            {"upstox.ltp": 1, "upstox.option_contract": 1, "upstox.option_chain": 1},
+            {
+                "upstox.instrument_search": 1,
+                "upstox.option_contract": 1,
+                "upstox.ltp": 1,
+                "upstox.option_chain": 1,
+            },
         )
 
         with (
             patch("tickertrail.cli.upstox_service.load_analytics_token", side_effect=service.UpstoxError("missing")),
             patch("sys.stderr", new_callable=io.StringIO) as err,
         ):
-            self.assertEqual(cli._print_nifty_option_chain(request), 3)
+            self.assertEqual(cli._print_option_chain(target, request), 3)
         self.assertIn("missing", err.getvalue())
 
-    def test_print_chain_exact_expiry_skips_contract_lookup(self):
-        """Use an explicit date directly without fetching the contract calendar."""
+    def test_print_chain_exact_expiry_is_validated_against_contracts(self):
+        """Validate an explicit date during the same F&O contract discovery step."""
         request = service.ChainRequest("expiry", "2026-08-27", 2)
+        target = cli._OptionChainTarget("SENSEX", "BSE")
+        underlying = service.OptionUnderlying(
+            "BSE_INDEX|SENSEX", "SENSEX", "BSE SENSEX", "BSE_INDEX"
+        )
         with (
             patch("tickertrail.cli.upstox_service.load_analytics_token", return_value="token"),
+            patch("tickertrail.cli.upstox_service.resolve_option_underlying", return_value=underlying),
             patch(
-                "tickertrail.cli.upstox_service.fetch_nifty_quote",
+                "tickertrail.cli.upstox_service.fetch_underlying_quote",
                 return_value=service.NiftyQuote(24590, 24500),
             ),
-            patch("tickertrail.cli.upstox_service.resolve_chain_expiry") as mock_expiry,
+            patch("tickertrail.cli.upstox_service.resolve_chain_expiry", return_value="2026-08-27") as mock_expiry,
             patch("tickertrail.cli.upstox_service.fetch_option_chain", return_value=_chain_rows()) as mock_chain,
-            patch("tickertrail.cli._render_nifty_option_chain"),
+            patch("tickertrail.cli._render_option_chain"),
         ):
             cli._reset_network_call_metrics()
-            self.assertEqual(cli._print_nifty_option_chain(request), 0)
-        mock_expiry.assert_not_called()
-        mock_chain.assert_called_once_with("token", "2026-08-27")
-        self.assertEqual(cli._NETWORK_CALL_COUNTS, {"upstox.ltp": 1, "upstox.option_chain": 1})
+            self.assertEqual(cli._print_option_chain(target, request), 0)
+        mock_expiry.assert_called_once_with(
+            "token", request, "BSE_INDEX|SENSEX", "BSE SENSEX"
+        )
+        mock_chain.assert_called_once_with(
+            "token", "2026-08-27", instrument_key="BSE_INDEX|SENSEX"
+        )
+        self.assertEqual(
+            cli._NETWORK_CALL_COUNTS,
+            {
+                "upstox.instrument_search": 1,
+                "upstox.option_contract": 1,
+                "upstox.ltp": 1,
+                "upstox.option_chain": 1,
+            },
+        )
 
 
 if __name__ == "__main__":

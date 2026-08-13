@@ -30,7 +30,7 @@ class UpstoxError(RuntimeError):
 
 @dataclass(frozen=True)
 class ChainRequest:
-    """Describe one normalized NIFTY option-chain request."""
+    """Describe one normalized option-chain request."""
 
     qualifier: str
     expiry_value: str
@@ -64,16 +64,30 @@ class OptionChainRow:
 
 
 @dataclass(frozen=True)
-class NiftyQuote:
-    """Hold the current NIFTY value and previous session close."""
+class OptionUnderlying:
+    """Identify one Upstox stock or index that may have option contracts."""
+
+    instrument_key: str
+    trading_symbol: str
+    display_name: str
+    segment: str
+
+
+@dataclass(frozen=True)
+class UnderlyingQuote:
+    """Hold an option underlying's current value and previous session close."""
 
     last_price: float | None
     close_price: float | None
 
 
+# Retain the original public name for callers created with the NIFTY-only feature.
+NiftyQuote = UnderlyingQuote
+
+
 @dataclass(frozen=True)
 class OptionExpiry:
-    """Describe one available NIFTY expiry and whether it is weekly."""
+    """Describe one available option expiry and whether it is weekly."""
 
     expiry: str
     weekly: bool
@@ -248,16 +262,95 @@ def _parse_option_side(payload: Any) -> OptionSide:
     )
 
 
+def _instrument_identity(value: Any) -> str:
+    """Normalize an instrument label for strict case-insensitive matching."""
+    return "".join(character for character in str(value or "").upper() if character.isalnum())
+
+
+def resolve_option_underlying(
+    token: str,
+    query: str,
+    request_json_fn: JsonRequest | None = None,
+    preferred_exchange: str = "NSE",
+) -> OptionUnderlying:
+    """Resolve an exact Indian stock or index query to its Upstox instrument key."""
+    cleaned_query = " ".join(query.strip().split())
+    identity = _instrument_identity(cleaned_query)
+    if not identity:
+        raise UpstoxError("Enter a stock ticker or index name for the option chain.")
+    fetch = request_json_fn or request_json
+    payload = fetch(
+        "/v2/instruments/search",
+        {
+            "query": cleaned_query,
+            "exchanges": "NSE,BSE",
+            "segments": "EQ,INDEX",
+            "page_number": "1",
+            "records": "30",
+        },
+        token,
+    )
+    raw_rows = payload.get("data")
+    if not isinstance(raw_rows, list):
+        raise UpstoxError(f"Upstox could not resolve stock or index '{cleaned_query}'.")
+
+    # Require an exact ticker/name identity so a fuzzy search cannot select another security.
+    ranked: list[tuple[tuple[int, int], dict[str, Any]]] = []
+    exchange_order = (preferred_exchange.strip().upper(), "NSE", "BSE")
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, dict):
+            continue
+        segment = str(raw_row.get("segment") or "").strip().upper()
+        instrument_key = str(raw_row.get("instrument_key") or "").strip()
+        if segment not in {"NSE_EQ", "BSE_EQ", "NSE_INDEX", "BSE_INDEX"} or not instrument_key:
+            continue
+        fields = (
+            raw_row.get("trading_symbol"),
+            raw_row.get("name"),
+            raw_row.get("short_name"),
+        )
+        exact_field = next(
+            (index for index, value in enumerate(fields) if _instrument_identity(value) == identity),
+            None,
+        )
+        if exact_field is None:
+            continue
+        exchange = str(raw_row.get("exchange") or segment.split("_", 1)[0]).strip().upper()
+        try:
+            exchange_rank = exchange_order.index(exchange)
+        except ValueError:
+            exchange_rank = len(exchange_order)
+        ranked.append(((exact_field, exchange_rank), raw_row))
+    if not ranked:
+        raise UpstoxError(
+            f"Upstox could not exactly match stock or index '{cleaned_query}'. "
+            "Use its exchange ticker or a supported index alias."
+        )
+
+    selected = min(ranked, key=lambda item: item[0])[1]
+    segment = str(selected.get("segment") or "").strip().upper()
+    trading_symbol = str(selected.get("trading_symbol") or cleaned_query).strip()
+    name = str(selected.get("name") or trading_symbol).strip()
+    display_name = name if segment.endswith("_INDEX") else trading_symbol
+    return OptionUnderlying(
+        instrument_key=str(selected["instrument_key"]).strip(),
+        trading_symbol=trading_symbol,
+        display_name=display_name,
+        segment=segment,
+    )
+
+
 def fetch_option_chain(
     token: str,
     expiry_value: str,
     request_json_fn: JsonRequest | None = None,
+    instrument_key: str = NIFTY_INSTRUMENT_KEY,
 ) -> list[OptionChainRow]:
-    """Fetch and normalize the NIFTY option chain for one expiry selector."""
+    """Fetch and normalize an underlying's option chain for one expiry."""
     fetch = request_json_fn or request_json
     payload = fetch(
         "/v2/option/chain",
-        {"instrument_key": NIFTY_INSTRUMENT_KEY, "expiry_date": expiry_value},
+        {"instrument_key": instrument_key, "expiry_date": expiry_value},
         token,
     )
     raw_rows = payload.get("data")
@@ -284,21 +377,23 @@ def fetch_option_chain(
     return sorted(rows, key=lambda row: row.strike)
 
 
-def fetch_nifty_option_expiries(
+def fetch_option_expiries(
     token: str,
+    instrument_key: str,
+    display_name: str,
     request_json_fn: JsonRequest | None = None,
     as_of: dt.date | None = None,
 ) -> list[OptionExpiry]:
-    """Fetch, de-duplicate, and sort currently available NIFTY expiries."""
+    """Fetch, de-duplicate, and sort one underlying's available expiries."""
     fetch = request_json_fn or request_json
     payload = fetch(
         "/v2/option/contract",
-        {"instrument_key": NIFTY_INSTRUMENT_KEY},
+        {"instrument_key": instrument_key},
         token,
     )
     raw_rows = payload.get("data")
     if not isinstance(raw_rows, list):
-        raise UpstoxError("Upstox returned no NIFTY option contracts.")
+        raise UpstoxError(f"Upstox returned no {display_name} option contracts.")
     current_date = as_of or dt.datetime.now(ZoneInfo("Asia/Kolkata")).date()
     weekly_by_expiry: dict[str, bool] = {}
     for raw_row in raw_rows:
@@ -315,7 +410,9 @@ def fetch_nifty_option_expiries(
         # If either contract classification is monthly, preserve the monthly designation.
         weekly_by_expiry[raw_expiry] = weekly_by_expiry.get(raw_expiry, True) and weekly
     if not weekly_by_expiry:
-        raise UpstoxError("Upstox returned no current NIFTY option expiries.")
+        raise UpstoxError(
+            f"{display_name} has no current option contracts on Upstox; it may not be an F&O underlying."
+        )
     return [
         OptionExpiry(expiry, weekly_by_expiry[expiry])
         for expiry in sorted(weekly_by_expiry)
@@ -325,47 +422,63 @@ def fetch_nifty_option_expiries(
 def resolve_chain_expiry(
     token: str,
     request: ChainRequest,
+    instrument_key: str = NIFTY_INSTRUMENT_KEY,
+    display_name: str = "NIFTY",
     request_json_fn: JsonRequest | None = None,
     as_of: dt.date | None = None,
 ) -> str:
-    """Resolve a chain qualifier against actual available NIFTY contracts."""
+    """Resolve a chain qualifier against one underlying's listed contracts."""
+    expiries = fetch_option_expiries(
+        token,
+        instrument_key,
+        display_name,
+        request_json_fn,
+        as_of,
+    )
     if request.qualifier == "expiry":
+        if request.expiry_value not in {item.expiry for item in expiries}:
+            raise UpstoxError(
+                f"No {display_name} option expiry is listed for {request.expiry_value}."
+            )
         return request.expiry_value
-    expiries = fetch_nifty_option_expiries(token, request_json_fn, as_of)
 
     # Positional qualifiers describe the next three listed expiries, independent of calendar gaps.
     qualifier_index = {"near": 0, "next": 1, "far": 2}
     if request.qualifier in qualifier_index:
         index = qualifier_index[request.qualifier]
         if index >= len(expiries):
-            raise UpstoxError(f"No {request.qualifier} NIFTY option expiry is currently available.")
+            raise UpstoxError(
+                f"No {request.qualifier} {display_name} option expiry is currently available."
+            )
         return expiries[index].expiry
     if request.qualifier == "month":
         monthly = next((item for item in expiries if not item.weekly), None)
         if monthly is None:
-            raise UpstoxError("No monthly NIFTY option expiry is currently available.")
+            raise UpstoxError(f"No monthly {display_name} option expiry is currently available.")
         return monthly.expiry
-    raise UpstoxError(f"Unsupported NIFTY expiry qualifier '{request.qualifier}'.")
+    raise UpstoxError(f"Unsupported option expiry qualifier '{request.qualifier}'.")
 
 
-def fetch_nifty_quote(
+def fetch_underlying_quote(
     token: str,
+    instrument_key: str,
+    display_name: str,
     request_json_fn: JsonRequest | None = None,
-) -> NiftyQuote:
-    """Fetch the current NIFTY value and previous session close."""
+) -> UnderlyingQuote:
+    """Fetch one option underlying's current value and previous close."""
     fetch = request_json_fn or request_json
     payload = fetch(
         "/v3/market-quote/ltp",
-        {"instrument_key": NIFTY_INSTRUMENT_KEY},
+        {"instrument_key": instrument_key},
         token,
     )
     data = payload.get("data")
     if not isinstance(data, dict) or not data:
-        raise UpstoxError("Upstox returned no NIFTY quote.")
+        raise UpstoxError(f"Upstox returned no {display_name} quote.")
     quote = next((value for value in data.values() if isinstance(value, dict)), None)
     if quote is None:
-        raise UpstoxError("Upstox returned no usable NIFTY quote.")
-    return NiftyQuote(
+        raise UpstoxError(f"Upstox returned no usable {display_name} quote.")
+    return UnderlyingQuote(
         last_price=_float_or_none(quote.get("last_price")),
         close_price=_float_or_none(quote.get("cp")),
     )

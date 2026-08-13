@@ -143,13 +143,19 @@ class UpstoxServiceTests(unittest.TestCase):
                 ],
             }
 
-        rows = service.fetch_option_chain("token", "2026-08-20", fake_request)
+        rows = service.fetch_option_chain(
+            "token",
+            "2026-08-20",
+            fake_request,
+            instrument_key="NSE_EQ|INE002A01018",
+        )
 
         self.assertEqual([row.strike for row in rows], [24550.0, 24600.0])
         self.assertEqual(rows[1].call.delta, 0.52)
         self.assertEqual(rows[1].call.ltp, 151.8)
         self.assertIsNone(rows[1].put.ltp)
         self.assertEqual(calls[0][0], "/v2/option/chain")
+        self.assertEqual(calls[0][1]["instrument_key"], "NSE_EQ|INE002A01018")
         self.assertEqual(calls[0][1]["expiry_date"], "2026-08-20")
         self.assertEqual(calls[0][2], "token")
 
@@ -164,7 +170,59 @@ class UpstoxServiceTests(unittest.TestCase):
                 lambda *_args: {"data": [{"strike_price": None}]},
             )
 
-    def test_fetch_and_resolve_actual_nifty_expiries(self):
+    def test_resolve_option_underlying_requires_an_exact_stock_or_index_match(self):
+        """Prefer the requested exchange and reject fuzzy-only instrument matches."""
+        payload = {
+            "data": [
+                {
+                    "name": "RELIANCE INDUSTRIES LTD",
+                    "segment": "NSE_EQ",
+                    "exchange": "NSE",
+                    "instrument_key": "NSE_EQ|INE002A01018",
+                    "trading_symbol": "RELIANCE",
+                    "short_name": "Reliance",
+                },
+                {
+                    "name": "RELIANCE INDUSTRIES LTD.",
+                    "segment": "BSE_EQ",
+                    "exchange": "BSE",
+                    "instrument_key": "BSE_EQ|INE002A01018",
+                    "trading_symbol": "RELIANCE",
+                    "short_name": "RELIANCE",
+                },
+                {
+                    "name": "RELIANCE POWER LTD.",
+                    "segment": "NSE_EQ",
+                    "exchange": "NSE",
+                    "instrument_key": "NSE_EQ|OTHER",
+                    "trading_symbol": "RPOWER",
+                    "short_name": "Reliance Power",
+                },
+                "bad",
+            ]
+        }
+        calls: list[tuple[str, dict[str, str], str]] = []
+
+        def fake_request(endpoint, params, token):
+            """Record the instrument search and return deterministic candidates."""
+            calls.append((endpoint, params, token))
+            return payload
+
+        underlying = service.resolve_option_underlying(
+            "token", "reliance", fake_request, preferred_exchange="BSE"
+        )
+        self.assertEqual(underlying.instrument_key, "BSE_EQ|INE002A01018")
+        self.assertEqual(underlying.display_name, "RELIANCE")
+        self.assertEqual(calls[0][0], "/v2/instruments/search")
+        self.assertEqual(calls[0][1]["segments"], "EQ,INDEX")
+        with self.assertRaisesRegex(service.UpstoxError, "exactly match"):
+            service.resolve_option_underlying("token", "rel", fake_request)
+        with self.assertRaisesRegex(service.UpstoxError, "Enter a stock"):
+            service.resolve_option_underlying("token", " ", fake_request)
+        with self.assertRaisesRegex(service.UpstoxError, "could not resolve"):
+            service.resolve_option_underlying("token", "INFY", lambda *_args: {})
+
+    def test_fetch_and_resolve_actual_option_expiries(self):
         """Resolve relative qualifiers from live-contract dates rather than calendar keywords."""
         calls: list[tuple[str, dict[str, str], str]] = []
 
@@ -184,8 +242,12 @@ class UpstoxServiceTests(unittest.TestCase):
                 ]
             }
 
-        expiries = service.fetch_nifty_option_expiries(
-            "token", fake_request, as_of=dt.date(2026, 8, 13)
+        expiries = service.fetch_option_expiries(
+            "token",
+            "NSE_EQ|INE002A01018",
+            "RELIANCE",
+            fake_request,
+            as_of=dt.date(2026, 8, 13),
         )
         self.assertEqual(
             expiries,
@@ -199,7 +261,7 @@ class UpstoxServiceTests(unittest.TestCase):
             calls[0],
             (
                 "/v2/option/contract",
-                {"instrument_key": service.NIFTY_INSTRUMENT_KEY},
+                {"instrument_key": "NSE_EQ|INE002A01018"},
                 "token",
             ),
         )
@@ -213,20 +275,45 @@ class UpstoxServiceTests(unittest.TestCase):
                 request = service.ChainRequest(qualifier, service.EXPIRY_QUALIFIERS[qualifier])
                 self.assertEqual(
                     service.resolve_chain_expiry(
-                        "token", request, fake_request, as_of=dt.date(2026, 8, 13)
+                        "token",
+                        request,
+                        "NSE_EQ|INE002A01018",
+                        "RELIANCE",
+                        fake_request,
+                        as_of=dt.date(2026, 8, 13),
                     ),
                     expected,
                 )
         exact = service.ChainRequest("expiry", "2026-08-27")
-        self.assertEqual(service.resolve_chain_expiry("token", exact), "2026-08-27")
+        with self.assertRaisesRegex(service.UpstoxError, "2026-08-27"):
+            service.resolve_chain_expiry(
+                "token",
+                exact,
+                "NSE_EQ|INE002A01018",
+                "RELIANCE",
+                fake_request,
+                as_of=dt.date(2026, 8, 13),
+            )
+        listed_exact = service.ChainRequest("expiry", "2026-08-25")
+        self.assertEqual(
+            service.resolve_chain_expiry(
+                "token",
+                listed_exact,
+                "NSE_EQ|INE002A01018",
+                "RELIANCE",
+                fake_request,
+                as_of=dt.date(2026, 8, 13),
+            ),
+            "2026-08-25",
+        )
 
     def test_expiry_resolution_reports_unavailable_contracts(self):
         """Return useful failures for missing positional and monthly expiries."""
-        with self.assertRaisesRegex(service.UpstoxError, "no NIFTY option contracts"):
-            service.fetch_nifty_option_expiries("t", lambda *_args: {})
-        with self.assertRaisesRegex(service.UpstoxError, "no current NIFTY"):
-            service.fetch_nifty_option_expiries(
-                "t", lambda *_args: {"data": [{"expiry": "bad"}]}
+        with self.assertRaisesRegex(service.UpstoxError, "no RELIANCE option contracts"):
+            service.fetch_option_expiries("t", "key", "RELIANCE", lambda *_args: {})
+        with self.assertRaisesRegex(service.UpstoxError, "not be an F&O underlying"):
+            service.fetch_option_expiries(
+                "t", "key", "RELIANCE", lambda *_args: {"data": [{"expiry": "bad"}]}
             )
         weekly_only = lambda *_args: {
             "data": [{"expiry": "2026-08-18", "weekly": True}]
@@ -235,6 +322,8 @@ class UpstoxServiceTests(unittest.TestCase):
             service.resolve_chain_expiry(
                 "t",
                 service.ChainRequest("next", "next"),
+                "key",
+                "RELIANCE",
                 weekly_only,
                 as_of=dt.date(2026, 8, 13),
             )
@@ -242,6 +331,8 @@ class UpstoxServiceTests(unittest.TestCase):
             service.resolve_chain_expiry(
                 "t",
                 service.ChainRequest("month", "month"),
+                "key",
+                "RELIANCE",
                 weekly_only,
                 as_of=dt.date(2026, 8, 13),
             )
@@ -249,23 +340,29 @@ class UpstoxServiceTests(unittest.TestCase):
             service.resolve_chain_expiry(
                 "t",
                 service.ChainRequest("later", "later"),
+                "key",
+                "RELIANCE",
                 weekly_only,
                 as_of=dt.date(2026, 8, 13),
             )
 
-    def test_fetch_nifty_quote_normalizes_first_quote_block(self):
-        """Extract NIFTY LTP and previous close from a mocked V3 quote."""
-        quote = service.fetch_nifty_quote(
+    def test_fetch_underlying_quote_normalizes_first_quote_block(self):
+        """Extract underlying LTP and previous close from a mocked V3 quote."""
+        quote = service.fetch_underlying_quote(
             "token",
+            "NSE_EQ|INE002A01018",
+            "RELIANCE",
             lambda endpoint, params, token: {
                 "data": {"NSE_INDEX:Nifty 50": {"last_price": "24619.35", "cp": 24490.95}}
             },
         )
-        self.assertEqual(quote, service.NiftyQuote(24619.35, 24490.95))
-        with self.assertRaisesRegex(service.UpstoxError, "no NIFTY quote"):
-            service.fetch_nifty_quote("token", lambda *_args: {"data": {}})
+        self.assertEqual(quote, service.UnderlyingQuote(24619.35, 24490.95))
+        with self.assertRaisesRegex(service.UpstoxError, "no RELIANCE quote"):
+            service.fetch_underlying_quote("token", "key", "RELIANCE", lambda *_args: {"data": {}})
         with self.assertRaisesRegex(service.UpstoxError, "no usable"):
-            service.fetch_nifty_quote("token", lambda *_args: {"data": {"x": "bad"}})
+            service.fetch_underlying_quote(
+                "token", "key", "RELIANCE", lambda *_args: {"data": {"x": "bad"}}
+            )
 
     def test_window_around_atm_returns_descending_spine(self):
         """Select symmetric wings and render higher strikes first."""

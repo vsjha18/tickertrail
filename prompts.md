@@ -38,7 +38,7 @@ Core commands:
 - `config`: enter a single-level configuration mode; `end` or `exit` returns to `tt>`.
 - `token add upstox <token>` in configuration mode: save the token inline without an interactive secret prompt.
 - `show token` / `show token upstox` from normal prompts: report configured state and file path without displaying the token; do not make status available inside configuration mode.
-- `chain` / `oc` in NIFTY context: show the Upstox NIFTY option chain; from other contexts require `chain nifty ...`.
+- `chain` / `oc` in a stock/index context: show its Upstox option chain when it has listed F&O contracts; elsewhere require `chain <symbol|index> ...`.
 - `Ctrl+C` while a command is running: cancel only the active command, reset transient progress output, and return to the REPL prompt.
 - `Ctrl+C` on an idle prompt: exit the REPL.
 - `news <code>`: resolve symbol and print latest Yahoo Finance headlines (best-effort availability per ticker/region).
@@ -123,10 +123,10 @@ Non-negotiable grammar:
 - `config` (enter configuration mode)
 - `token add upstox <token>` / `end` (configuration mode)
 - `show token` / `show token upstox` (normal root, stock, index, or watchlist prompt)
-- `chain nifty [near|next|far|month] [strikes <1-25>]`
-- `chain nifty expiry YYYY-MM-DD [strikes <1-25>]`
-- `chain [near|next|far|month] [strikes <1-25>]` (NIFTY context)
-- `chain expiry YYYY-MM-DD [strikes <1-25>]` (NIFTY context)
+- `chain <symbol|index> [near|next|far|month] [strikes <1-25>]`
+- `chain <symbol|index> expiry YYYY-MM-DD [strikes <1-25>]`
+- `chain [near|next|far|month] [strikes <1-25>]` (stock/index context)
+- `chain expiry YYYY-MM-DD [strikes <1-25>]` (stock/index context)
 
 Usability preference:
 - Prefer non-dash forms in docs/examples (`c nifty 3mo w`, `t nifty 2y mo`).
@@ -165,7 +165,7 @@ Design a small architecture for tickertrail with clear separation:
 - Keep historical close-series retrieval in a reusable module (for example `price_history.py`) with injected downloader/telemetry callbacks so non-CLI workflows can reuse it and tests can stub network cleanly.
 - Keep quote/rebased/compare presentation logic in a reusable views module (for example `views.py`) and let `cli.py` call it as an adapter layer.
 - Keep grouped snapshot/day-range enrichment logic in a reusable service module (for example `snapshot_service.py`) with injected fetch/progress callbacks so index/snap features are reusable outside REPL.
-- Keep Upstox token persistence, HTTP normalization, contract-calendar expiry resolution, option-chain parsing, and ATM-window selection in `upstox_service.py`; allow injected request callbacks so tests never use the live API.
+- Keep Upstox token persistence, exact stock/index instrument search, F&O contract validation, contract-calendar expiry resolution, HTTP normalization, option-chain parsing, and ATM-window selection in `upstox_service.py`; allow injected request callbacks so tests never use the live API.
 - Keep canonical index aliases, board membership, Yahoo fetch mappings, expected constituent counts, and prompt labels in `index_config.py`; `cli.py` may expose compatibility aliases but should not duplicate the configuration.
 
 3) Render layer
@@ -686,9 +686,9 @@ Keep it concise and factual.
 - Continue using three batch download passes first; use quote fallback only for unresolved or range-enrichment cases.
 - If all supported quote/range fields are absent, render `Range` as `n/a` instead of synthesizing fake bounds.
 
-## 19) Upstox NIFTY Option-Chain Prompt
+## 19) Upstox F&O Option-Chain Prompt
 ```text
-Implement a read-only NIFTY option-chain workflow backed only by the Upstox APIs.
+Implement a read-only stock/index option-chain workflow backed only by the Upstox APIs.
 
 Configuration:
 - `config` enters `tt>config>` from the normal REPL.
@@ -698,21 +698,22 @@ Configuration:
 - Persist the stripped token atomically in repository-local `.upstox_analytics_token`, chmod `0600`, and list that file in `.gitignore`.
 
 Chain grammar:
-- NIFTY context: `chain|oc [near|next|far|month] [strikes <1-25>]`.
-- NIFTY context exact date: `chain|oc expiry YYYY-MM-DD [strikes <1-25>]`.
-- Other contexts: require `chain|oc nifty ...` so intent is explicit.
+- Stock/index context: `chain|oc [near|next|far|month] [strikes <1-25>]`.
+- Stock/index context exact date: `chain|oc expiry YYYY-MM-DD [strikes <1-25>]`.
+- Any prompt can use `chain|oc <symbol|index> ...` for an explicit target.
 - Defaults: `near`, 10 strikes below and 10 strikes above ATM.
-- Resolve relative commands from `/v2/option/contract` without an expiry filter: `near`, `next`, and `far` are the first three actual future expiry dates; `month` is the first future contract date marked non-weekly. Do not send static relative keywords directly to the chain endpoint because a calendar week with no remaining expiry can return an empty chain.
+- Resolve every target through `/v2/instruments/search` with NSE/BSE and EQ/INDEX filters. Require an exact ticker, name, or short-name identity; prefer the exchange implied by `.NS`/`.BO`, otherwise prefer NSE. Reuse TickerTrail's index aliases before search.
+- Validate every request through `/v2/option/contract` without an expiry filter. `near`, `next`, and `far` are the first three actual future expiry dates; `month` is the first future contract date marked non-weekly; an exact date must be listed. Empty contracts mean the stock/index is not currently an F&O underlying. Do not send static relative keywords directly to the chain endpoint because a calendar week with no remaining expiry can return an empty chain.
 
 API/data boundaries:
-- Fetch the chain from `/v2/option/chain` using `NSE_INDEX|Nifty 50` and the selected expiry value.
+- Fetch the chain from `/v2/option/chain` using the resolved underlying instrument key and selected expiry value.
 - Send an explicit stable TickerTrail `User-Agent` on every HTTP request so gateway policy does not classify the default Python urllib signature as banned.
-- Fetch NIFTY LTP/previous close from `/v3/market-quote/ltp`; if this header quote fails but the chain has an underlying spot, render using that spot.
+- Fetch the underlying LTP/previous close from `/v3/market-quote/ltp`; if this header quote fails but the chain has an underlying spot, render using that spot.
 - Never silently switch the chain to Yahoo or another provider.
 - Normalize malformed/missing scalar fields to `n/a` and return concise safe errors for network, token, gateway, and response failures. Preserve Cloudflare/gateway details from structured error payloads; never label every HTTP 403 as a rejected token.
 
 Rendering contract:
-- Top line: NIFTY value plus signed absolute and percentage daily move.
+- Top line: resolved stock/index name and value plus signed absolute and percentage daily move.
 - Calls on the left, strike spine in the center, puts on the right.
 - Always sort the strike spine descending so higher strikes are at the top.
 - Make both header rows bold, every strike-spine cell bold, and the complete ATM row bold.
