@@ -708,13 +708,14 @@ Chain grammar:
 
 API/data boundaries:
 - Fetch the chain from `/v2/option/chain` using the resolved underlying instrument key and selected expiry value.
+- Preserve `lot_size` per expiry from the existing `/v2/option/contract` response and show it on the ATM metadata line. Do not add another request; render `n/a` if the selected expiry has no single valid positive whole-number lot size.
 - Send an explicit stable TickerTrail `User-Agent` on every HTTP request so gateway policy does not classify the default Python urllib signature as banned.
 - Fetch the underlying LTP/previous close from `/v3/market-quote/ltp`; if this header quote fails but the chain has an underlying spot, render using that spot.
 - Never silently switch the chain to Yahoo or another provider.
 - Normalize malformed/missing scalar fields to `n/a` and return concise safe errors for network, token, gateway, and response failures. Preserve Cloudflare/gateway details from structured error payloads; never label every HTTP 403 as a rejected token.
 
 Rendering contract:
-- Top line: resolved stock/index name and value plus signed absolute and percentage daily move.
+- Top line: resolved stock/index name and value plus signed absolute and percentage daily move; the metadata line includes ATM, selected-expiry lot size, strike-window size, update time, and provider.
 - Calls on the left, strike spine in the center, puts on the right.
 - Always sort the strike spine descending so higher strikes are at the top.
 - Make both header rows bold, every strike-spine cell bold, and the complete ATM row bold.

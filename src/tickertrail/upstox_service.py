@@ -87,10 +87,11 @@ NiftyQuote = UnderlyingQuote
 
 @dataclass(frozen=True)
 class OptionExpiry:
-    """Describe one available option expiry and whether it is weekly."""
+    """Describe one available option expiry, classification, and lot size."""
 
     expiry: str
     weekly: bool
+    lot_size: int | None = None
 
 
 JsonRequest = Callable[[str, dict[str, str], str], dict[str, Any]]
@@ -146,7 +147,7 @@ def token_is_configured() -> bool:
 
 
 def parse_chain_args(args: list[str]) -> tuple[ChainRequest | None, str | None]:
-    """Parse expiry and strike-count modifiers for the NIFTY chain command."""
+    """Parse expiry and strike-count modifiers for an option-chain command."""
     tokens = [token.strip() for token in args if token.strip()]
     qualifier = "near"
     expiry_value = EXPIRY_QUALIFIERS[qualifier]
@@ -187,6 +188,17 @@ def _float_or_none(value: Any) -> float | None:
         return None if value is None else float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _positive_int_or_none(value: Any) -> int | None:
+    """Convert a positive whole-number API scalar to int when possible."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not parsed.is_integer() or parsed <= 0:
+        return None
+    return int(parsed)
 
 
 def _api_error_message(payload: Any, status_code: int) -> str:
@@ -396,6 +408,7 @@ def fetch_option_expiries(
         raise UpstoxError(f"Upstox returned no {display_name} option contracts.")
     current_date = as_of or dt.datetime.now(ZoneInfo("Asia/Kolkata")).date()
     weekly_by_expiry: dict[str, bool] = {}
+    lot_sizes_by_expiry: dict[str, set[int]] = {}
     for raw_row in raw_rows:
         if not isinstance(raw_row, dict):
             continue
@@ -409,14 +422,64 @@ def fetch_option_expiries(
         weekly = bool(raw_row.get("weekly"))
         # If either contract classification is monthly, preserve the monthly designation.
         weekly_by_expiry[raw_expiry] = weekly_by_expiry.get(raw_expiry, True) and weekly
+        lot_size = _positive_int_or_none(raw_row.get("lot_size"))
+        if lot_size is not None:
+            lot_sizes_by_expiry.setdefault(raw_expiry, set()).add(lot_size)
     if not weekly_by_expiry:
         raise UpstoxError(
             f"{display_name} has no current option contracts on Upstox; it may not be an F&O underlying."
         )
     return [
-        OptionExpiry(expiry, weekly_by_expiry[expiry])
+        OptionExpiry(
+            expiry,
+            weekly_by_expiry[expiry],
+            next(iter(lot_sizes_by_expiry.get(expiry, set())))
+            if len(lot_sizes_by_expiry.get(expiry, set())) == 1
+            else None,
+        )
         for expiry in sorted(weekly_by_expiry)
     ]
+
+
+def resolve_chain_contract(
+    token: str,
+    request: ChainRequest,
+    instrument_key: str = NIFTY_INSTRUMENT_KEY,
+    display_name: str = "NIFTY",
+    request_json_fn: JsonRequest | None = None,
+    as_of: dt.date | None = None,
+) -> OptionExpiry:
+    """Resolve a chain request to one listed expiry and its lot size."""
+    expiries = fetch_option_expiries(
+        token,
+        instrument_key,
+        display_name,
+        request_json_fn,
+        as_of,
+    )
+    if request.qualifier == "expiry":
+        exact = next((item for item in expiries if item.expiry == request.expiry_value), None)
+        if exact is None:
+            raise UpstoxError(
+                f"No {display_name} option expiry is listed for {request.expiry_value}."
+            )
+        return exact
+
+    # Positional qualifiers describe the next three listed expiries, independent of calendar gaps.
+    qualifier_index = {"near": 0, "next": 1, "far": 2}
+    if request.qualifier in qualifier_index:
+        index = qualifier_index[request.qualifier]
+        if index >= len(expiries):
+            raise UpstoxError(
+                f"No {request.qualifier} {display_name} option expiry is currently available."
+            )
+        return expiries[index]
+    if request.qualifier == "month":
+        monthly = next((item for item in expiries if not item.weekly), None)
+        if monthly is None:
+            raise UpstoxError(f"No monthly {display_name} option expiry is currently available.")
+        return monthly
+    raise UpstoxError(f"Unsupported option expiry qualifier '{request.qualifier}'.")
 
 
 def resolve_chain_expiry(
@@ -427,36 +490,15 @@ def resolve_chain_expiry(
     request_json_fn: JsonRequest | None = None,
     as_of: dt.date | None = None,
 ) -> str:
-    """Resolve a chain qualifier against one underlying's listed contracts."""
-    expiries = fetch_option_expiries(
+    """Resolve a chain qualifier to its listed expiry-date string."""
+    return resolve_chain_contract(
         token,
+        request,
         instrument_key,
         display_name,
         request_json_fn,
         as_of,
-    )
-    if request.qualifier == "expiry":
-        if request.expiry_value not in {item.expiry for item in expiries}:
-            raise UpstoxError(
-                f"No {display_name} option expiry is listed for {request.expiry_value}."
-            )
-        return request.expiry_value
-
-    # Positional qualifiers describe the next three listed expiries, independent of calendar gaps.
-    qualifier_index = {"near": 0, "next": 1, "far": 2}
-    if request.qualifier in qualifier_index:
-        index = qualifier_index[request.qualifier]
-        if index >= len(expiries):
-            raise UpstoxError(
-                f"No {request.qualifier} {display_name} option expiry is currently available."
-            )
-        return expiries[index].expiry
-    if request.qualifier == "month":
-        monthly = next((item for item in expiries if not item.weekly), None)
-        if monthly is None:
-            raise UpstoxError(f"No monthly {display_name} option expiry is currently available.")
-        return monthly.expiry
-    raise UpstoxError(f"Unsupported option expiry qualifier '{request.qualifier}'.")
+    ).expiry
 
 
 def fetch_underlying_quote(

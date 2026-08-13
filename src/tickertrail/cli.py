@@ -2610,6 +2610,7 @@ def _render_option_chain(
     rows: list[upstox_service.OptionChainRow],
     quote: upstox_service.UnderlyingQuote | None,
     display_name: str,
+    lot_size: int | None,
 ) -> None:
     """Render a descending stock or index option-chain table with coloured Greeks."""
     chain_spot = next((row.spot for row in rows if row.spot is not None), None)
@@ -2646,8 +2647,10 @@ def _render_option_chain(
         )
     )
     updated = dt.datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d-%m-%Y %H:%M:%S IST")
+    lot_size_text = "n/a" if lot_size is None else f"{lot_size:,}"
     print(
-        f"ATM {atm_strike:,.0f} · {request.strikes_each_side} strikes below/above · "
+        f"ATM {atm_strike:,.0f} · Lot size {lot_size_text} · "
+        f"{request.strikes_each_side} strikes below/above · "
         f"Updated {updated} · Upstox"
     )
 
@@ -2694,7 +2697,7 @@ def _print_option_chain(
 
         # Contract discovery both validates F&O eligibility and resolves every expiry form.
         _track_network_call("upstox.option_contract")
-        resolved_expiry = upstox_service.resolve_chain_expiry(
+        resolved_contract = upstox_service.resolve_chain_contract(
             token,
             request,
             underlying.instrument_key,
@@ -2714,10 +2717,16 @@ def _print_option_chain(
         _track_network_call("upstox.option_chain")
         rows = upstox_service.fetch_option_chain(
             token,
-            resolved_expiry,
+            resolved_contract.expiry,
             instrument_key=underlying.instrument_key,
         )
-        _render_option_chain(request, rows, quote, underlying.display_name)
+        _render_option_chain(
+            request,
+            rows,
+            quote,
+            underlying.display_name,
+            resolved_contract.lot_size,
+        )
     except upstox_service.UpstoxError as exc:
         print(str(exc), file=sys.stderr)
         return 3

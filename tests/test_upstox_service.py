@@ -234,10 +234,10 @@ class UpstoxServiceTests(unittest.TestCase):
                     "bad",
                     {"expiry": "invalid", "weekly": True},
                     {"expiry": "2026-08-11", "weekly": True},
-                    {"expiry": "2026-08-18", "weekly": True},
-                    {"expiry": "2026-08-18", "weekly": True},
-                    {"expiry": "2026-08-25", "weekly": True},
-                    {"expiry": "2026-08-25", "weekly": False},
+                    {"expiry": "2026-08-18", "weekly": True, "lot_size": 250},
+                    {"expiry": "2026-08-18", "weekly": True, "lot_size": "250"},
+                    {"expiry": "2026-08-25", "weekly": True, "lot_size": 250},
+                    {"expiry": "2026-08-25", "weekly": False, "lot_size": 250},
                     {"expiry": "2026-09-01", "weekly": True},
                 ]
             }
@@ -252,9 +252,9 @@ class UpstoxServiceTests(unittest.TestCase):
         self.assertEqual(
             expiries,
             [
-                service.OptionExpiry("2026-08-18", True),
-                service.OptionExpiry("2026-08-25", False),
-                service.OptionExpiry("2026-09-01", True),
+                service.OptionExpiry("2026-08-18", True, 250),
+                service.OptionExpiry("2026-08-25", False, 250),
+                service.OptionExpiry("2026-09-01", True, None),
             ],
         )
         self.assertEqual(
@@ -274,7 +274,7 @@ class UpstoxServiceTests(unittest.TestCase):
             with self.subTest(qualifier=qualifier):
                 request = service.ChainRequest(qualifier, service.EXPIRY_QUALIFIERS[qualifier])
                 self.assertEqual(
-                    service.resolve_chain_expiry(
+                    service.resolve_chain_contract(
                         "token",
                         request,
                         "NSE_EQ|INE002A01018",
@@ -282,11 +282,11 @@ class UpstoxServiceTests(unittest.TestCase):
                         fake_request,
                         as_of=dt.date(2026, 8, 13),
                     ),
-                    expected,
+                    next(item for item in expiries if item.expiry == expected),
                 )
         exact = service.ChainRequest("expiry", "2026-08-27")
         with self.assertRaisesRegex(service.UpstoxError, "2026-08-27"):
-            service.resolve_chain_expiry(
+            service.resolve_chain_contract(
                 "token",
                 exact,
                 "NSE_EQ|INE002A01018",
@@ -295,6 +295,17 @@ class UpstoxServiceTests(unittest.TestCase):
                 as_of=dt.date(2026, 8, 13),
             )
         listed_exact = service.ChainRequest("expiry", "2026-08-25")
+        self.assertEqual(
+            service.resolve_chain_contract(
+                "token",
+                listed_exact,
+                "NSE_EQ|INE002A01018",
+                "RELIANCE",
+                fake_request,
+                as_of=dt.date(2026, 8, 13),
+            ),
+            service.OptionExpiry("2026-08-25", False, 250),
+        )
         self.assertEqual(
             service.resolve_chain_expiry(
                 "token",
@@ -306,6 +317,26 @@ class UpstoxServiceTests(unittest.TestCase):
             ),
             "2026-08-25",
         )
+
+    def test_option_expiries_hide_ambiguous_or_invalid_lot_sizes(self):
+        """Show no lot size when contract rows disagree or contain invalid values."""
+        payload = {
+            "data": [
+                {"expiry": "2026-08-25", "weekly": False, "lot_size": 500},
+                {"expiry": "2026-08-25", "weekly": False, "lot_size": 550},
+                {"expiry": "2026-09-29", "weekly": False, "lot_size": 0},
+                {"expiry": "2026-09-29", "weekly": False, "lot_size": "bad"},
+                {"expiry": "2026-10-27", "weekly": False, "lot_size": 12.5},
+            ]
+        }
+        expiries = service.fetch_option_expiries(
+            "token",
+            "NSE_EQ|key",
+            "HDFCBANK",
+            lambda *_args: payload,
+            as_of=dt.date(2026, 8, 14),
+        )
+        self.assertEqual([item.lot_size for item in expiries], [None, None, None])
 
     def test_expiry_resolution_reports_unavailable_contracts(self):
         """Return useful failures for missing positional and monthly expiries."""

@@ -175,11 +175,13 @@ class UpstoxCliTests(unittest.TestCase):
                 _chain_rows(),
                 service.NiftyQuote(24590.0, 24460.0),
                 "Nifty 50",
+                65,
             )
         rendered = out.getvalue()
         plain = cli._ANSI_ESCAPE_RE.sub("", rendered)
         self.assertIn("NIFTY 50  24,590.00  +130.00 (+0.53%) ↑", plain)
         self.assertIn("Expiry 20-Aug-2026", plain)
+        self.assertIn("ATM 24,600 · Lot size 65 · 2 strikes below/above", plain)
         self.assertIn("Delta         LTP (Today) │", plain)
         self.assertIn("│ LTP (Today)           Delta", plain)
         self.assertIn("Theta", plain)
@@ -205,9 +207,10 @@ class UpstoxCliTests(unittest.TestCase):
         )
         with patch("sys.stdout", new_callable=io.StringIO) as out:
             cli._render_option_chain(
-                service.ChainRequest("far", "far", 1), rows, None, "Nifty 50"
+                service.ChainRequest("far", "far", 1), rows, None, "Nifty 50", None
             )
         self.assertIn("24,590.00  n/a", out.getvalue())
+        self.assertIn("Lot size n/a", out.getvalue())
         self.assertIn("n/a", out.getvalue())
 
     def test_chain_expiry_label_preserves_non_iso_values(self):
@@ -242,6 +245,7 @@ class UpstoxCliTests(unittest.TestCase):
                 missing_spot_rows,
                 None,
                 "RELIANCE",
+                500,
             )
 
     def test_print_chain_fetches_quote_and_chain_with_spot_fallback(self):
@@ -255,7 +259,10 @@ class UpstoxCliTests(unittest.TestCase):
             patch("tickertrail.cli.upstox_service.load_analytics_token", return_value="token"),
             patch("tickertrail.cli.upstox_service.resolve_option_underlying", return_value=underlying) as mock_underlying,
             patch("tickertrail.cli.upstox_service.fetch_underlying_quote", side_effect=service.UpstoxError("quote down")),
-            patch("tickertrail.cli.upstox_service.resolve_chain_expiry", return_value="2026-08-18") as mock_expiry,
+            patch(
+                "tickertrail.cli.upstox_service.resolve_chain_contract",
+                return_value=service.OptionExpiry("2026-08-18", True, 500),
+            ) as mock_expiry,
             patch("tickertrail.cli.upstox_service.fetch_option_chain", return_value=_chain_rows()) as mock_chain,
             patch("tickertrail.cli._render_option_chain") as mock_render,
         ):
@@ -271,7 +278,7 @@ class UpstoxCliTests(unittest.TestCase):
         mock_chain.assert_called_once_with(
             "token", "2026-08-18", instrument_key="NSE_EQ|INE002A01018"
         )
-        mock_render.assert_called_once_with(request, unittest.mock.ANY, None, "RELIANCE")
+        mock_render.assert_called_once_with(request, unittest.mock.ANY, None, "RELIANCE", 500)
         self.assertEqual(
             cli._NETWORK_CALL_COUNTS,
             {
@@ -303,7 +310,10 @@ class UpstoxCliTests(unittest.TestCase):
                 "tickertrail.cli.upstox_service.fetch_underlying_quote",
                 return_value=service.NiftyQuote(24590, 24500),
             ),
-            patch("tickertrail.cli.upstox_service.resolve_chain_expiry", return_value="2026-08-27") as mock_expiry,
+            patch(
+                "tickertrail.cli.upstox_service.resolve_chain_contract",
+                return_value=service.OptionExpiry("2026-08-27", True, 20),
+            ) as mock_expiry,
             patch("tickertrail.cli.upstox_service.fetch_option_chain", return_value=_chain_rows()) as mock_chain,
             patch("tickertrail.cli._render_option_chain"),
         ):

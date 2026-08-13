@@ -430,7 +430,7 @@ def _command_entries(period_hint: str) -> dict[str, HelpEntry]:
             ),
             (
                 "Show a descending option-chain spine for an Upstox F&O stock or index.",
-                "Includes LTP change, Delta, Theta, volume, and OI.",
+                "Includes lot size, LTP change, Delta, Theta, volume, and OI.",
                 "Relative qualifiers resolve against currently listed Upstox contract dates.",
                 "Bare chain uses the active stock/index; explicit form works from any prompt.",
                 "Requires an Upstox analytics token configured through config mode.",
