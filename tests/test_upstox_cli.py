@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import io
 import tempfile
 import unittest
@@ -10,7 +11,12 @@ from tickertrail import cli
 from tickertrail import upstox_service as service
 
 
-def _side(ltp: float, close: float, delta: float) -> service.OptionSide:
+def _side(
+    ltp: float,
+    close: float,
+    delta: float,
+    instrument_key: str | None = None,
+) -> service.OptionSide:
     """Build one complete deterministic option side for rendering tests."""
     return service.OptionSide(
         ltp=ltp,
@@ -22,6 +28,13 @@ def _side(ltp: float, close: float, delta: float) -> service.OptionSide:
         gamma=0.0014,
         theta=-9.1,
         vega=11.4,
+        instrument_key=instrument_key,
+        bid_price=ltp - 0.1,
+        bid_qty=3250,
+        ask_price=ltp + 0.05,
+        ask_qty=1950,
+        prev_oi=40000,
+        pop=48.0,
     )
 
 
@@ -31,6 +44,51 @@ def _chain_rows() -> list[service.OptionChainRow]:
         service.OptionChainRow(float(strike), "2026-08-20", 24590.0, _side(120 + offset, 110, 0.52), _side(120 - offset, 125, -0.48))
         for offset, strike in enumerate(range(24450, 24751, 50))
     ]
+
+
+def _detail_rows() -> list[service.OptionChainRow]:
+    """Build deterministic NIFTY rows with instrument keys around the requested strike."""
+    return [
+        service.OptionChainRow(
+            float(strike),
+            "2026-08-25",
+            24197.1,
+            _side(
+                128.7 + ((strike - 24200) / 10),
+                80.4,
+                0.601,
+                f"NSE_FO|CALL{strike}",
+            ),
+            _side(
+                70.45 - ((strike - 24200) / 10),
+                163.25,
+                -0.401,
+                f"NSE_FO|PUT{strike}",
+            ),
+        )
+        for strike in (24150, 24200, 24250)
+    ]
+
+
+def _detail_quotes() -> dict[str, service.FullMarketQuote]:
+    """Build grouped underlying, call, and put quotes with current-session ranges."""
+    return {
+        "NSE_INDEX|Nifty 50": service.FullMarketQuote(
+            "NSE_INDEX|Nifty 50",
+            24197.1,
+            24078.3,
+            24190.0,
+            24226.85,
+            24184.55,
+            "1787195765000",
+        ),
+        "NSE_FO|CALL24200": service.FullMarketQuote(
+            "NSE_FO|CALL24200", 128.7, 80.4, 81.0, 132.4, 79.8, None
+        ),
+        "NSE_FO|PUT24200": service.FullMarketQuote(
+            "NSE_FO|PUT24200", 70.45, 163.25, 160.0, 166.25, 68.7, None
+        ),
+    }
 
 
 class UpstoxCliTests(unittest.TestCase):
@@ -122,6 +180,36 @@ class UpstoxCliTests(unittest.TestCase):
         self.assertIsNone(rejected)
         self.assertIn("No active stock or index", error or "")
 
+    def test_option_detail_parser_resolves_contextual_and_explicit_targets(self):
+        """Parse contextual strikes, explicit targets, grouping commas, and errors."""
+        target, request, error = cli._parse_option_detail_command(
+            ["24,200", "next"], "^NSEI"
+        )
+        self.assertIsNone(error)
+        self.assertEqual(target, cli._OptionChainTarget("NIFTY 50", "NSE"))
+        self.assertEqual(request, service.OptionDetailRequest(24200, "next", "next"))
+
+        target, request, error = cli._parse_option_detail_command(
+            ["reliance", "1400.50", "month"], None
+        )
+        self.assertIsNone(error)
+        self.assertEqual(target, cli._OptionChainTarget("RELIANCE", "NSE"))
+        self.assertEqual(request, service.OptionDetailRequest(1400.5, "month", "month"))
+
+        for args, current, message in (
+            ([], "^NSEI", "Incomplete command"),
+            (["24200"], None, "No active stock or index"),
+            (["nifty"], None, "Incomplete command"),
+            (["nifty", "bad"], None, "positive number"),
+        ):
+            with self.subTest(args=args):
+                rejected_target, rejected_request, parse_error = cli._parse_option_detail_command(
+                    args, current
+                )
+                self.assertIsNone(rejected_target)
+                self.assertIsNone(rejected_request)
+                self.assertIn(message, parse_error or "")
+
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._print_option_chain", return_value=0)
     @patch("tickertrail.cli._print_quote", return_value=0)
@@ -162,6 +250,66 @@ class UpstoxCliTests(unittest.TestCase):
                 (cli._OptionChainTarget("RELIANCE", "NSE"), service.ChainRequest("next", "next", 10)),
             ],
         )
+        self.assertIn("No active stock or index", err.getvalue())
+
+    @patch("tickertrail.cli._enable_repl_history", return_value=None)
+    @patch("tickertrail.cli._print_option_detail", return_value=0)
+    @patch("tickertrail.cli._print_quote", return_value=0)
+    def test_repl_routes_option_detail_aliases_and_contextual_help(
+        self, _mock_quote, mock_detail, _mock_hist
+    ):
+        """Dispatch contextual opt aliases and intercept situational help without networking."""
+        with (
+            patch(
+                "builtins.input",
+                side_effect=[
+                    "opt 24200",
+                    "option 24,200 next",
+                    "opt 24200 expiry 2026-08-27",
+                    "opt ?",
+                    "exit",
+                ],
+            ),
+            patch("sys.stdout", new_callable=io.StringIO) as out,
+        ):
+            rc = cli._run_repl("nifty", "^NSEI", {"regularMarketPrice": 1.0}, 100, 22)
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            [call.args for call in mock_detail.call_args_list],
+            [
+                (
+                    cli._OptionChainTarget("NIFTY 50", "NSE"),
+                    service.OptionDetailRequest(24200, "near", "near"),
+                ),
+                (
+                    cli._OptionChainTarget("NIFTY 50", "NSE"),
+                    service.OptionDetailRequest(24200, "next", "next"),
+                ),
+                (
+                    cli._OptionChainTarget("NIFTY 50", "NSE"),
+                    service.OptionDetailRequest(24200, "expiry", "2026-08-27"),
+                ),
+            ],
+        )
+        self.assertIn("Command: opt", out.getvalue())
+        self.assertNotIn("opt <symbol|index>", out.getvalue())
+
+    @patch("tickertrail.cli._enable_repl_history", return_value=None)
+    @patch("tickertrail.cli._print_option_detail", return_value=0)
+    def test_repl_routes_explicit_option_detail_and_rejects_root_bare_strike(
+        self, mock_detail, _mock_hist
+    ):
+        """Require explicit underlying targets outside stock or index context."""
+        with (
+            patch(
+                "builtins.input",
+                side_effect=["opt 24200", "opt nifty 24200 next", "option reliance 1400", "exit"],
+            ),
+            patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
+            rc = cli._run_repl(None, None, None, 100, 22)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(mock_detail.call_args_list), 2)
         self.assertIn("No active stock or index", err.getvalue())
 
     def test_render_chain_has_descending_bold_spine_headers_and_atm_row(self):
@@ -212,6 +360,107 @@ class UpstoxCliTests(unittest.TestCase):
         self.assertIn("24,590.00  n/a", out.getvalue())
         self.assertIn("Lot size n/a", out.getvalue())
         self.assertIn("n/a", out.getvalue())
+
+    def test_render_option_detail_shows_ranges_calculations_and_semantic_colors(self):
+        """Render the approved two-sided visual drill-down with deterministic calculations."""
+        rows = _detail_rows()
+        underlying = service.OptionUnderlying(
+            "NSE_INDEX|Nifty 50", "NIFTY", "Nifty 50", "NSE_INDEX"
+        )
+        with (
+            patch("tickertrail.cli._supports_color", return_value=True),
+            patch("sys.stdout", new_callable=io.StringIO) as out,
+        ):
+            cli._render_option_detail(
+                service.OptionDetailRequest(24200, "near", "near"),
+                rows[1],
+                rows,
+                _detail_quotes(),
+                underlying,
+                65,
+                now=dt.datetime(2026, 8, 20, 11, 26, 5),
+            )
+        rendered = out.getvalue()
+        plain = cli._ANSI_ESCAPE_RE.sub("", rendered)
+        self.assertIn("NIFTY 50  24,197.10  +118.80 (+0.49%) ↑", plain)
+        self.assertIn("OPTION DETAIL · NEAR · Expiry 25-Aug-2026 · 5 calendar days", plain)
+        self.assertIn("Strike 24,200 · ATM · Lot size 65", plain)
+        self.assertIn("Underlying Day Range", plain)
+        self.assertIn("24,184.55 .. 24,226.85", plain)
+        self.assertIn("CALL Day Range", plain)
+        self.assertIn("79.80 .. 132.40", plain)
+        self.assertIn("PUT Day Range", plain)
+        self.assertIn("68.70 .. 166.25", plain)
+        self.assertIn("128.70  +48.30 (+60.07%) ↑", plain)
+        self.assertIn("70.45  -92.80 (-56.85%) ↓", plain)
+        self.assertIn("128.60 × 3.25K", plain)
+        self.assertIn("128.75 × 1.95K", plain)
+        self.assertIn("0.15 (0.12%)", plain)
+        self.assertIn("+2.00K (+5.00%)", plain)
+        self.assertIn("Implied volatility", plain)
+        self.assertIn("11.60%", plain)
+        self.assertIn("ATM · OTM by 2.90", plain)
+        self.assertIn("ATM · ITM by 2.90", plain)
+        self.assertIn("₹8,365.50", plain)
+        self.assertIn("₹4,579.25", plain)
+        self.assertIn("24,328.70", plain)
+        self.assertIn("24,129.55", plain)
+        self.assertLessEqual(max(len(line) for line in plain.splitlines()), 100)
+        self.assertIn("\033[1;36m", rendered)
+        self.assertIn("\033[1;33m", rendered)
+        self.assertIn("\033[32m", rendered)
+        self.assertIn("\033[31m", rendered)
+
+    def test_option_detail_helpers_and_rendering_handle_sparse_data(self):
+        """Render sparse provider fields as n/a and cover defensive detail calculations."""
+        empty = service.OptionSide(None, None, None, None, None, None, None, None, None)
+        crossed = service.OptionSide(
+            10, 10, 1, 1, 1, 0.5, 0.1, -1, 1, bid_price=11, ask_price=10
+        )
+        zero_book = service.OptionSide(
+            10, 10, 1, 1, 1, 0.5, 0.1, -1, 1, bid_price=0, ask_price=0
+        )
+        self.assertEqual(cli._format_option_spread(crossed), "n/a")
+        self.assertEqual(cli._format_option_spread(zero_book), "0.00 (n/a)")
+        self.assertEqual(cli._format_option_market_level(None, None), "n/a")
+        self.assertEqual(cli._format_option_detail_ltp(empty), ("n/a", "gray"))
+        self.assertEqual(cli._format_option_oi_change(empty), ("n/a", "gray"))
+        self.assertEqual(cli._format_option_detail_scalar(None), "n/a")
+        self.assertEqual(cli._option_moneyness(100, 100, "call", True), "ATM")
+        self.assertEqual(cli._option_moneyness(101, 100, "call", False), "ITM by 1.00")
+        self.assertEqual(cli._option_moneyness(101, 100, "put", False), "OTM by 1.00")
+
+        rows = [service.OptionChainRow(100, "n/a", 101, empty, empty)]
+        underlying = service.OptionUnderlying("key", "TEST", "Test", "NSE_INDEX")
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            cli._render_option_detail(
+                service.OptionDetailRequest(100, "expiry", "n/a"),
+                rows[0],
+                rows,
+                {},
+                underlying,
+                None,
+                now=dt.datetime(2026, 8, 20, 11, 26, 5),
+            )
+        text = out.getvalue()
+        self.assertIn("calendar days n/a", text)
+        self.assertIn("Lot size n/a", text)
+        self.assertEqual(
+            sum("Day Range" in line and line.endswith("n/a") for line in text.splitlines()),
+            3,
+        )
+
+        no_spot = [service.OptionChainRow(100, "2026-08-25", None, empty, empty)]
+        with self.assertRaisesRegex(service.UpstoxError, "no current Test value"):
+            cli._render_option_detail(
+                service.OptionDetailRequest(100, "near", "near"),
+                no_spot[0],
+                no_spot,
+                {},
+                underlying,
+                None,
+                now=dt.datetime(2026, 8, 20),
+            )
 
     def test_chain_expiry_label_preserves_non_iso_values(self):
         """Keep an unexpected expiry readable instead of failing rendering."""
@@ -334,6 +583,119 @@ class UpstoxCliTests(unittest.TestCase):
                 "upstox.option_chain": 1,
             },
         )
+
+    def test_print_option_detail_uses_grouped_quote_and_fixed_four_call_budget(self):
+        """Resolve one strike and batch its three range quotes in the fourth request."""
+        request = service.OptionDetailRequest(24200, "next", "next")
+        target = cli._OptionChainTarget("NIFTY 50", "NSE")
+        underlying = service.OptionUnderlying(
+            "NSE_INDEX|Nifty 50", "NIFTY", "NIFTY 50", "NSE_INDEX"
+        )
+        rows = _detail_rows()
+        with (
+            patch("tickertrail.cli.upstox_service.load_analytics_token", return_value="token"),
+            patch(
+                "tickertrail.cli.upstox_service.resolve_option_underlying",
+                return_value=underlying,
+            ) as mock_underlying,
+            patch(
+                "tickertrail.cli.upstox_service.resolve_chain_contract",
+                return_value=service.OptionExpiry("2026-08-25", True, 65),
+            ) as mock_contract,
+            patch(
+                "tickertrail.cli.upstox_service.fetch_option_chain", return_value=rows
+            ) as mock_chain,
+            patch(
+                "tickertrail.cli.upstox_service.fetch_full_market_quotes",
+                return_value=_detail_quotes(),
+            ) as mock_quotes,
+            patch("tickertrail.cli._render_option_detail") as mock_render,
+        ):
+            cli._reset_network_call_metrics()
+            rc = cli._print_option_detail(target, request)
+        self.assertEqual(rc, 0)
+        mock_underlying.assert_called_once_with(
+            "token", "NIFTY 50", preferred_exchange="NSE"
+        )
+        mock_contract.assert_called_once_with(
+            "token",
+            service.ChainRequest("next", "next", 10),
+            "NSE_INDEX|Nifty 50",
+            "NIFTY 50",
+        )
+        mock_chain.assert_called_once_with(
+            "token", "2026-08-25", instrument_key="NSE_INDEX|Nifty 50"
+        )
+        mock_quotes.assert_called_once_with(
+            "token",
+            ["NSE_INDEX|Nifty 50", "NSE_FO|CALL24200", "NSE_FO|PUT24200"],
+        )
+        mock_render.assert_called_once_with(
+            request,
+            rows[1],
+            rows,
+            _detail_quotes(),
+            underlying,
+            65,
+        )
+        self.assertEqual(
+            cli._NETWORK_CALL_COUNTS,
+            {
+                "upstox.instrument_search": 1,
+                "upstox.option_contract": 1,
+                "upstox.option_chain": 1,
+                "upstox.market_quote": 1,
+            },
+        )
+
+    def test_print_option_detail_tolerates_quote_failure_and_rejects_missing_strike(self):
+        """Keep chain details usable without ranges and stop before quoting an invalid strike."""
+        request = service.OptionDetailRequest(24200, "near", "near")
+        target = cli._OptionChainTarget("NIFTY", "NSE")
+        underlying = service.OptionUnderlying("underlying", "NIFTY", "NIFTY", "NSE_INDEX")
+        rows = _detail_rows()
+        with (
+            patch("tickertrail.cli.upstox_service.load_analytics_token", return_value="token"),
+            patch("tickertrail.cli.upstox_service.resolve_option_underlying", return_value=underlying),
+            patch(
+                "tickertrail.cli.upstox_service.resolve_chain_contract",
+                return_value=service.OptionExpiry("2026-08-25", True, 65),
+            ),
+            patch("tickertrail.cli.upstox_service.fetch_option_chain", return_value=rows),
+            patch(
+                "tickertrail.cli.upstox_service.fetch_full_market_quotes",
+                side_effect=service.UpstoxError("quote unavailable"),
+            ),
+            patch("tickertrail.cli._render_option_detail") as mock_render,
+        ):
+            self.assertEqual(cli._print_option_detail(target, request), 0)
+        self.assertEqual(mock_render.call_args.args[3], {})
+
+        missing_request = service.OptionDetailRequest(24210, "near", "near")
+        with (
+            patch("tickertrail.cli.upstox_service.load_analytics_token", return_value="token"),
+            patch("tickertrail.cli.upstox_service.resolve_option_underlying", return_value=underlying),
+            patch(
+                "tickertrail.cli.upstox_service.resolve_chain_contract",
+                return_value=service.OptionExpiry("2026-08-25", True, 65),
+            ),
+            patch("tickertrail.cli.upstox_service.fetch_option_chain", return_value=rows),
+            patch("tickertrail.cli.upstox_service.fetch_full_market_quotes") as mock_quotes,
+            patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
+            self.assertEqual(cli._print_option_detail(target, missing_request), 3)
+        mock_quotes.assert_not_called()
+        self.assertIn("Nearby listed strikes", err.getvalue())
+
+        with (
+            patch(
+                "tickertrail.cli.upstox_service.load_analytics_token",
+                side_effect=service.UpstoxError("missing token"),
+            ),
+            patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
+            self.assertEqual(cli._print_option_detail(target, request), 3)
+        self.assertIn("missing token", err.getvalue())
 
     @patch("tickertrail.cli._enable_repl_history", return_value=None)
     @patch("tickertrail.cli._print_company_fundamentals", return_value=0)

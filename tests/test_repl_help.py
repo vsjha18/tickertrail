@@ -26,6 +26,7 @@ class ReplHelpTests(unittest.TestCase):
             repl_help.print_help("cache clear", "Nd|Nmo(<12)|Ny")
             repl_help.print_help("delete all", "Nd|Nmo(<12)|Ny")
             repl_help.print_help("oc", "Nd|Nmo(<12)|Ny")
+            repl_help.print_help("option", "Nd|Nmo(<12)|Ny")
             repl_help.print_help("token", "Nd|Nmo(<12)|Ny")
             repl_help.print_help("show", "Nd|Nmo(<12)|Ny")
             repl_help.print_help("funda", "Nd|Nmo(<12)|Ny")
@@ -36,6 +37,8 @@ class ReplHelpTests(unittest.TestCase):
         self.assertIn("Command: cache clear", text)
         self.assertIn("delete all", text)
         self.assertIn("Command: chain", text)
+        self.assertIn("Command: opt", text)
+        self.assertIn("Aliases: option", text)
         self.assertIn("Command: token", text)
         self.assertIn("Command: show token", text)
         self.assertIn("Command: fundmentals", text)
@@ -62,6 +65,7 @@ class ReplHelpTests(unittest.TestCase):
         self.assertIn("delete all", text)
         self.assertIn("watchlist                   Exit watchlist mode", text)
         self.assertIn("chain | oc [qualifier]", text)
+        self.assertIn("opt <strike> [qualifier]", text)
         self.assertIn("token add upstox <token>", text)
         self.assertIn("General commands:", text)
         self.assertIn("Commands available here (unknown):", text)
@@ -79,6 +83,8 @@ class ReplHelpTests(unittest.TestCase):
         self.assertIn("fundmentals | funda", stock_out.getvalue())
         self.assertIn("chain | oc [qualifier]", stock_out.getvalue())
         self.assertIn("chain <symbol|index>", stock_out.getvalue())
+        self.assertIn("opt <strike> [qualifier]", stock_out.getvalue())
+        self.assertIn("opt <symbol|index>", stock_out.getvalue())
         self.assertIn("show token [upstox]", stock_out.getvalue())
 
     def test_chain_help_limits_grammar_to_the_current_prompt(self):
@@ -98,6 +104,22 @@ class ReplHelpTests(unittest.TestCase):
         self.assertIn("Name the target", root_text)
         self.assertNotIn("  chain next\n", root_text)
 
+    def test_option_detail_help_limits_grammar_to_the_current_prompt(self):
+        """Show contextual strike grammar and require an explicit root target."""
+        with patch("sys.stdout", new_callable=io.StringIO) as stock_out:
+            repl_help.print_help("opt", "Nd|Nmo(<12)|Ny", "index")
+        stock_text = stock_out.getvalue()
+        self.assertIn("opt <strike> [near|next|far|month]", stock_text)
+        self.assertIn("Use the active stock/index", stock_text)
+        self.assertNotIn("opt <symbol|index>", stock_text)
+
+        with patch("sys.stdout", new_callable=io.StringIO) as root_out:
+            repl_help.print_help("option", "Nd|Nmo(<12)|Ny", "base")
+        root_text = root_out.getvalue()
+        self.assertIn("opt <symbol|index> <strike>", root_text)
+        self.assertIn("Name the target", root_text)
+        self.assertNotIn("  opt 24200\n", root_text)
+
     def test_trailing_question_help_resolves_prefixes_and_stage_availability(self):
         """Resolve nested aliases and hide commands or forms unavailable at a stage."""
         with patch("sys.stdout", new_callable=io.StringIO) as out:
@@ -113,6 +135,7 @@ class ReplHelpTests(unittest.TestCase):
             repl_help.print_situational_help("mystery", "Nd|Nmo(<12)|Ny", "stock")
             repl_help.print_situational_help("funda", "Nd|Nmo(<12)|Ny", "stock")
             repl_help.print_situational_help("fundmentals", "Nd|Nmo(<12)|Ny", "index")
+            repl_help.print_situational_help("option 24200 next", "Nd|Nmo(<12)|Ny", "index")
         text = out.getvalue()
         self.assertIn("Command: watchlist", text)
         self.assertIn("Command: watchlist create", text)
@@ -125,6 +148,7 @@ class ReplHelpTests(unittest.TestCase):
         self.assertIn("No command help matches 'mystery'", text)
         self.assertIn("Command: fundmentals", text)
         self.assertIn("not available at the index prompt", text)
+        self.assertIn("Command: opt", text)
 
 
 if __name__ == "__main__":

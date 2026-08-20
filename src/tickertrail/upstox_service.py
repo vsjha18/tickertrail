@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,7 @@ EXPIRY_QUALIFIERS = {
     "month": "month",
 }
 CHAIN_USAGE = "chain [near|next|far|month|expiry YYYY-MM-DD] [strikes <1-25>]"
+OPTION_DETAIL_USAGE = "opt <strike> [near|next|far|month|expiry YYYY-MM-DD]"
 
 
 class UpstoxError(RuntimeError):
@@ -38,6 +40,15 @@ class ChainRequest:
 
 
 @dataclass(frozen=True)
+class OptionDetailRequest:
+    """Describe one normalized option strike-detail request."""
+
+    strike: float
+    qualifier: str
+    expiry_value: str
+
+
+@dataclass(frozen=True)
 class OptionSide:
     """Hold market data and Greeks for one call or put contract."""
 
@@ -50,6 +61,13 @@ class OptionSide:
     gamma: float | None
     theta: float | None
     vega: float | None
+    instrument_key: str | None = None
+    bid_price: float | None = None
+    bid_qty: float | None = None
+    ask_price: float | None = None
+    ask_qty: float | None = None
+    prev_oi: float | None = None
+    pop: float | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +97,19 @@ class UnderlyingQuote:
 
     last_price: float | None
     close_price: float | None
+
+
+@dataclass(frozen=True)
+class FullMarketQuote:
+    """Hold one instrument's latest price and current-session range."""
+
+    instrument_key: str
+    last_price: float | None
+    close_price: float | None
+    open_price: float | None
+    day_high: float | None
+    day_low: float | None
+    timestamp: str | None
 
 
 # Retain the original public name for callers created with the NIFTY-only feature.
@@ -182,6 +213,49 @@ def parse_chain_args(args: list[str]) -> tuple[ChainRequest | None, str | None]:
     return ChainRequest(qualifier, expiry_value, strikes_each_side), None
 
 
+def parse_option_detail_args(
+    args: list[str],
+) -> tuple[OptionDetailRequest | None, str | None]:
+    """Parse a strike followed by one optional option-expiry selector."""
+    tokens = [token.strip() for token in args if token.strip()]
+    if not tokens:
+        return None, f"Incomplete command. Usage: {OPTION_DETAIL_USAGE}"
+
+    raw_strike = tokens.pop(0).replace(",", "")
+    try:
+        strike = float(raw_strike)
+    except ValueError:
+        return None, "Strike must be a positive number, for example 24200 or 1,400.50."
+    if not math.isfinite(strike) or strike <= 0:
+        return None, "Strike must be a positive number, for example 24200 or 1,400.50."
+
+    qualifier = "near"
+    expiry_value = EXPIRY_QUALIFIERS[qualifier]
+
+    # Detail commands accept exactly one expiry selector and never a strike-window modifier.
+    if tokens and tokens[0].lower() in EXPIRY_QUALIFIERS:
+        if len(tokens) != 1:
+            return None, f"Usage: {OPTION_DETAIL_USAGE}"
+        qualifier = tokens[0].lower()
+        expiry_value = EXPIRY_QUALIFIERS[qualifier]
+    elif tokens and tokens[0].lower() == "expiry":
+        if len(tokens) < 2:
+            return None, f"Incomplete command. Usage: {OPTION_DETAIL_USAGE}"
+        if len(tokens) != 2:
+            return None, f"Usage: {OPTION_DETAIL_USAGE}"
+        raw_date = tokens[1]
+        try:
+            dt.date.fromisoformat(raw_date)
+        except ValueError:
+            return None, f"Invalid expiry date '{raw_date}'. Use YYYY-MM-DD."
+        qualifier = "expiry"
+        expiry_value = raw_date
+    elif tokens:
+        return None, f"Usage: {OPTION_DETAIL_USAGE}"
+
+    return OptionDetailRequest(strike, qualifier, expiry_value), None
+
+
 def _float_or_none(value: Any) -> float | None:
     """Convert one API scalar to float without propagating malformed data."""
     try:
@@ -271,6 +345,13 @@ def _parse_option_side(payload: Any) -> OptionSide:
         gamma=_float_or_none(greeks.get("gamma")),
         theta=_float_or_none(greeks.get("theta")),
         vega=_float_or_none(greeks.get("vega")),
+        instrument_key=str(option.get("instrument_key") or "").strip() or None,
+        bid_price=_float_or_none(market.get("bid_price")),
+        bid_qty=_float_or_none(market.get("bid_qty")),
+        ask_price=_float_or_none(market.get("ask_price")),
+        ask_qty=_float_or_none(market.get("ask_qty")),
+        prev_oi=_float_or_none(market.get("prev_oi")),
+        pop=_float_or_none(greeks.get("pop")),
     )
 
 
@@ -523,6 +604,79 @@ def fetch_underlying_quote(
     return UnderlyingQuote(
         last_price=_float_or_none(quote.get("last_price")),
         close_price=_float_or_none(quote.get("cp")),
+    )
+
+
+def fetch_full_market_quotes(
+    token: str,
+    instrument_keys: list[str],
+    request_json_fn: JsonRequest | None = None,
+) -> dict[str, FullMarketQuote]:
+    """Fetch current-session quote ranges for one or more instruments."""
+    unique_keys = list(dict.fromkeys(key.strip() for key in instrument_keys if key.strip()))
+    if not unique_keys:
+        raise UpstoxError("No instruments are available for the option-detail quote.")
+    fetch = request_json_fn or request_json
+    payload = fetch(
+        "/v2/market-quote/quotes",
+        {"instrument_key": ",".join(unique_keys)},
+        token,
+    )
+    data = payload.get("data")
+    if not isinstance(data, dict) or not data:
+        raise UpstoxError("Upstox returned no full market quotes.")
+
+    quotes: dict[str, FullMarketQuote] = {}
+    for raw_quote in data.values():
+        if not isinstance(raw_quote, dict):
+            continue
+        instrument_key = str(
+            raw_quote.get("instrument_token") or raw_quote.get("instrument_key") or ""
+        ).strip()
+        if not instrument_key:
+            continue
+        ohlc = raw_quote.get("ohlc") if isinstance(raw_quote.get("ohlc"), dict) else {}
+        quotes[instrument_key] = FullMarketQuote(
+            instrument_key=instrument_key,
+            last_price=_float_or_none(raw_quote.get("last_price")),
+            close_price=_float_or_none(ohlc.get("close")),
+            open_price=_float_or_none(ohlc.get("open")),
+            day_high=_float_or_none(ohlc.get("high")),
+            day_low=_float_or_none(ohlc.get("low")),
+            timestamp=str(raw_quote.get("timestamp") or "").strip() or None,
+        )
+    if not quotes:
+        raise UpstoxError("Upstox returned no usable full market quotes.")
+    return quotes
+
+
+def find_option_strike(
+    rows: list[OptionChainRow],
+    strike: float,
+    display_name: str,
+    expiry: str,
+) -> OptionChainRow:
+    """Return one exactly listed strike or raise an error with nearby alternatives."""
+    exact = next(
+        (row for row in rows if math.isclose(row.strike, strike, rel_tol=0.0, abs_tol=1e-6)),
+        None,
+    )
+    if exact is not None:
+        return exact
+
+    # Nearby alternatives make copied or mistyped strikes easy to correct without substitution.
+    nearest = sorted(rows, key=lambda row: (abs(row.strike - strike), row.strike))[:3]
+    nearby = sorted(row.strike for row in nearest)
+
+    def format_strike(value: float) -> str:
+        """Format one suggested strike without unnecessary decimal zeroes."""
+        return f"{value:,.2f}".rstrip("0").rstrip(".")
+
+    suggestion = ""
+    if nearby:
+        suggestion = f" Nearby listed strikes: {', '.join(format_strike(value) for value in nearby)}."
+    raise UpstoxError(
+        f"Strike {format_strike(strike)} is not listed for {display_name} expiry {expiry}.{suggestion}"
     )
 
 

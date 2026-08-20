@@ -41,6 +41,8 @@ _COMMAND_ALIASES: dict[str, str] = {
     "snap": "snap",
     "chain": "chain",
     "oc": "chain",
+    "opt": "opt",
+    "option": "opt",
     "fundmentals": "fundmentals",
     "funda": "fundmentals",
     "config": "config",
@@ -143,6 +145,7 @@ _OVERVIEW_LINES = (
     "  index | index list          Index board and symbol catalog",
     "  snap                        Active index/watchlist snapshot",
     "  chain <symbol|index> [qualifier]   F&O option chain",
+    "  opt <symbol|index> <strike> ...    Option strike detail",
     "  fundmentals | funda          Active-stock fundamentals dashboard",
     "",
     "Charts + Tables:",
@@ -175,6 +178,7 @@ _OVERVIEW_LINES = (
     "  token add upstox <token>",
     "  show token",
     "  chain nifty next",
+    "  opt nifty 24200 next",
     "",
 )
 
@@ -186,6 +190,7 @@ _STAGE_HELP_LINES: dict[str, tuple[str, ...]] = {
         "  watchlist create|list|delete|merge ...",
         "  index | index list          Show indices",
         "  chain <symbol|index> ...    Show an F&O option chain",
+        "  opt <symbol|index> <strike> ...  Show option strike detail",
         "  config                      Enter configuration mode",
         "  code <query> | news <code>  Find a ticker or show news",
         "  cmp <codes...> [period [agg]]",
@@ -194,6 +199,7 @@ _STAGE_HELP_LINES: dict[str, tuple[str, ...]] = {
         "  quote | q                   Refresh the active quote",
         "  fundmentals | funda         Show Upstox company fundamentals",
         "  chain | oc [qualifier]      Active stock option chain (if F&O)",
+        "  opt <strike> [qualifier]    Active stock option detail",
         "  c | cc | t | tt ...         Show charts or tables",
         "  <period>                    Show a swing chart",
         "  move | trend | relret ...   Analyze the active symbol",
@@ -203,6 +209,7 @@ _STAGE_HELP_LINES: dict[str, tuple[str, ...]] = {
     "index": (
         "  quote | q | snap            Refresh or show constituents",
         "  chain | oc [qualifier]      Active index option chain (if F&O)",
+        "  opt <strike> [qualifier]    Active index option detail",
         "  move | trend | relret | corr [period]",
         "  c | cc | t | tt ...         Show charts or tables",
         "  <period>                    Show a swing chart",
@@ -236,6 +243,7 @@ _STAGE_HELP_COMMON_LINES = (
     "  cmp <codes...> [period [agg]]",
     "  index | index list          Show indices",
     "  chain <symbol|index> ...    Show an F&O option chain",
+    "  opt <symbol|index> <strike> ...  Show option strike detail",
     "  config                      Enter configuration mode",
     "  show token [upstox]         Show token configuration status",
     "  cache | cache clear         Inspect or clear history cache",
@@ -281,6 +289,7 @@ _TOPIC_SUMMARIES: dict[str, tuple[str, ...]] = {
         "Index Commands:",
         "  index | index list | snap",
         "  chain | oc [near|next|far|month] [strikes <n>] (if F&O)",
+        "  opt <strike> [near|next|far|month] (if F&O)",
         "  move [period] | trend | relret [period] | corr [period]",
         "",
         "Examples:",
@@ -288,6 +297,7 @@ _TOPIC_SUMMARIES: dict[str, tuple[str, ...]] = {
         "  index list",
         "  nifty",
         "  chain next",
+        "  opt 24200 next",
         "  move 1mo",
         "",
     ),
@@ -476,6 +486,25 @@ def _command_entries(period_hint: str) -> dict[str, HelpEntry]:
             ("expiry: near", "strikes on each side of ATM: 10"),
             ("chain", "chain reliance next", "chain bank month strikes 15", "chain sensex"),
         ),
+        "opt": HelpEntry(
+            "opt",
+            ("option",),
+            (
+                "opt <strike> [near|next|far|month]",
+                "opt <strike> expiry YYYY-MM-DD",
+                "opt <symbol|index> <strike> [near|next|far|month]",
+                "opt <symbol|index> <strike> expiry YYYY-MM-DD",
+            ),
+            (
+                "Show call and put details side-by-side for one exactly listed strike.",
+                "Includes colored day ranges, top-of-book liquidity, OI change, all core Greeks, and premium context.",
+                "Relative qualifiers use the same listed-contract calendar as chain.",
+                "Bare strike form uses the active stock/index; explicit form works from any prompt.",
+                "Requires an Upstox analytics token configured through config mode.",
+            ),
+            ("expiry: near", "option sides: call and put"),
+            ("opt 24200", "opt 24200 next", "opt reliance 1400 month"),
+        ),
         "fundmentals": HelpEntry(
             "fundmentals",
             ("funda",),
@@ -663,6 +692,38 @@ def _chain_help_for_stage(entry: HelpEntry, stage: str | None) -> HelpEntry:
     return entry
 
 
+def _option_detail_help_for_stage(entry: HelpEntry, stage: str | None) -> HelpEntry:
+    """Limit option-detail grammar to forms usable from the current prompt stage."""
+    normalized_stage = (stage or "").strip().lower()
+    if normalized_stage in {"stock", "index"}:
+        return HelpEntry(
+            entry.command,
+            entry.aliases,
+            entry.usage[:2],
+            (
+                "Use the active stock/index from the current prompt.",
+                *entry.details[:3],
+                entry.details[-1],
+            ),
+            entry.defaults,
+            ("opt 24200", "opt 24200 next", "opt 24200 expiry 2026-08-27"),
+        )
+    if normalized_stage in {"base", "watchlist"}:
+        return HelpEntry(
+            entry.command,
+            entry.aliases,
+            entry.usage[2:],
+            (
+                "Name the target because this prompt has no active stock/index.",
+                *entry.details[:3],
+                entry.details[-1],
+            ),
+            entry.defaults,
+            ("opt nifty 24200 next", "opt reliance 1400 month"),
+        )
+    return entry
+
+
 def _command_available_at_stage(canonical: str, stage: str) -> bool:
     """Return whether one canonical command can execute at a prompt stage."""
     if stage == "config":
@@ -704,6 +765,8 @@ def _help_entry_for_stage(entry: HelpEntry, canonical: str, stage: str) -> HelpE
     """Filter one command help page to syntax executable at the current stage."""
     if canonical == "chain":
         return _chain_help_for_stage(entry, stage)
+    if canonical == "opt":
+        return _option_detail_help_for_stage(entry, stage)
     if stage == "base" and canonical in {"move", "trend", "relret", "corr"}:
         explicit_usage = tuple(line for line in entry.usage if " on " in f" {line} ")
         return HelpEntry(
@@ -773,4 +836,6 @@ def print_help(topic: str | None, period_hint: str, stage: str | None = None) ->
     entry = _command_entries(period_hint)[canonical]
     if canonical == "chain":
         entry = _chain_help_for_stage(entry, stage)
+    if canonical == "opt":
+        entry = _option_detail_help_for_stage(entry, stage)
     _print_command_help(entry)

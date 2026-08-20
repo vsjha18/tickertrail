@@ -40,6 +40,7 @@ Core commands:
 - `token add upstox <token>` in configuration mode: save the token inline without an interactive secret prompt.
 - `show token` / `show token upstox` from normal prompts: report configured state and file path without displaying the token; do not make status available inside configuration mode.
 - `chain` / `oc` in a stock/index context: show its Upstox option chain when it has listed F&O contracts; elsewhere require `chain <symbol|index> ...`.
+- `opt` / `option` in a stock/index context: compare CE and PE details for one exactly listed strike; elsewhere require `opt <symbol|index> <strike> ...`.
 - `fundmentals` / `funda` in a stock context: show the active listed company's consolidated Upstox fundamentals; accept no target or qualifier arguments and keep it unavailable at root, index, watchlist, and config prompts.
 - `Ctrl+C` while a command is running: cancel only the active command, reset transient progress output, and return to the REPL prompt.
 - `Ctrl+C` on an idle prompt: exit the REPL.
@@ -129,6 +130,10 @@ Non-negotiable grammar:
 - `chain <symbol|index> expiry YYYY-MM-DD [strikes <1-25>]`
 - `chain [near|next|far|month] [strikes <1-25>]` (stock/index context)
 - `chain expiry YYYY-MM-DD [strikes <1-25>]` (stock/index context)
+- `opt <strike> [near|next|far|month]` (stock/index context)
+- `opt <strike> expiry YYYY-MM-DD` (stock/index context)
+- `opt <symbol|index> <strike> [near|next|far|month]` (any normal prompt)
+- `opt <symbol|index> <strike> expiry YYYY-MM-DD` (any normal prompt)
 - `fundmentals` / `funda` (stock context only; no qualifiers)
 
 Usability preference:
@@ -168,7 +173,7 @@ Design a small architecture for tickertrail with clear separation:
 - Keep historical close-series retrieval in a reusable module (for example `price_history.py`) with injected downloader/telemetry callbacks so non-CLI workflows can reuse it and tests can stub network cleanly.
 - Keep quote/rebased/compare presentation logic in a reusable views module (for example `views.py`) and let `cli.py` call it as an adapter layer.
 - Keep grouped snapshot/day-range enrichment logic in a reusable service module (for example `snapshot_service.py`) with injected fetch/progress callbacks so index/snap features are reusable outside REPL.
-- Keep Upstox token persistence, exact stock/index instrument search, F&O contract validation, contract-calendar expiry resolution, HTTP normalization, option-chain parsing, and ATM-window selection in `upstox_service.py`; allow injected request callbacks so tests never use the live API.
+- Keep Upstox token persistence, exact stock/index instrument search, F&O contract validation, contract-calendar expiry resolution, HTTP normalization, option-chain parsing, exact strike selection, grouped full-quote normalization, and ATM-window selection in `upstox_service.py`; allow injected request callbacks so tests never use the live API.
 - Keep Upstox company-fundamentals fetching, normalization, derived metrics, and dashboard rendering in `fundamentals.py`; limit `cli.py` to stock-context dispatch and network telemetry.
 - Keep canonical index aliases, board membership, Yahoo fetch mappings, expected constituent counts, and prompt labels in `index_config.py`; `cli.py` may expose compatibility aliases but should not duplicate the configuration.
 
@@ -712,11 +717,20 @@ Chain grammar:
 - Resolve every target through `/v2/instruments/search` with NSE/BSE and EQ/INDEX filters. Require an exact ticker, name, or short-name identity; prefer the exchange implied by `.NS`/`.BO`, otherwise prefer NSE. Reuse TickerTrail's index aliases before search.
 - Validate every request through `/v2/option/contract` without an expiry filter. `near`, `next`, and `far` are the first three actual future expiry dates; `month` is the first future contract date marked non-weekly; an exact date must be listed. Empty contracts mean the stock/index is not currently an F&O underlying. Do not send static relative keywords directly to the chain endpoint because a calendar week with no remaining expiry can return an empty chain.
 
+Strike-detail grammar:
+- Stock/index context: `opt|option <strike> [near|next|far|month]`.
+- Stock/index exact date: `opt|option <strike> expiry YYYY-MM-DD`.
+- Root/watchlist explicit forms: `opt|option <symbol|index> <strike> ...`.
+- Keep `opt ?`, `option ?`, and `help opt` situational in the same manner as chain help.
+- Defaults: `near`, with both CE and PE displayed. Never inherit the previously viewed chain expiry.
+- Accept positive finite strikes with grouping commas or decimals. Require an exact listed strike for the resolved expiry; never silently choose the nearest strike. On failure, suggest up to three nearby listed strikes.
+
 API/data boundaries:
 - Fetch the chain from `/v2/option/chain` using the resolved underlying instrument key and selected expiry value.
 - Preserve `lot_size` per expiry from the existing `/v2/option/contract` response and show it on the ATM metadata line. Do not add another request; render `n/a` if the selected expiry has no single valid positive whole-number lot size.
 - Send an explicit stable TickerTrail `User-Agent` on every HTTP request so gateway policy does not classify the default Python urllib signature as banned.
 - Fetch the underlying LTP/previous close from `/v3/market-quote/ltp`; if this header quote fails but the chain has an underlying spot, render using that spot.
+- For `opt`, retain each side's instrument key, bid/ask prices and quantities, previous OI, and complete Greek set from the existing option-chain response. After selecting the exact strike, replace the chain command's underlying-only LTP call with one `/v2/market-quote/quotes` request batched across the underlying, CE, and PE keys. Use it for current-session OHLC range bars and the underlying header. A failed grouped quote must leave chain-derived detail usable and render unavailable ranges as `n/a`.
 - Never silently switch the chain to Yahoo or another provider.
 - Normalize malformed/missing scalar fields to `n/a` and return concise safe errors for network, token, gateway, and response failures. Preserve Cloudflare/gateway details from structured error payloads; never label every HTTP 403 as a rejected token.
 
@@ -729,10 +743,15 @@ Rendering contract:
 - Show LTP as `<price> (<signed-percent>%)`; put Delta immediately beside LTP.
 - Also show Theta, volume, and OI. Omit IV, Gamma, and Vega so the table remains compact, targeting at most 120 columns for typical values.
 - Select the nearest available strike as ATM; on an exact-distance tie choose the lower strike.
+- The `opt` view uses a vertical call-versus-put comparison rather than a wide chain row. Render three independently scaled 40-character day-range bars for the underlying, CE, and PE, with the current value clamped to the displayed range. Clearly label every bar because their scales differ.
+- Group detail rows under `PRICE & LIQUIDITY`, `RISK & GREEKS`, and `VALUE AT CURRENT PREMIUM`. Show LTP with absolute/percentage daily movement, best bid/ask with quantity, midpoint-relative spread, volume, OI, OI change, IV, Delta, Gamma, Theta, Vega, moneyness, intrinsic/time value, premium per lot, and expiry breakeven.
+- Premium per lot is `LTP * lot_size`; call/put intrinsic values are `max(spot-strike, 0)` and `max(strike-spot, 0)`; time value is `LTP-intrinsic`; long-premium expiry breakevens are `strike+call LTP` and `strike-put LTP`. Do not imply fees, taxes, slippage, margin, position-side economics, or trade recommendations.
+- Use semantic ANSI colors redundantly with text: green for positive movements/OI change and bids, red for negative movements/OI change and asks, yellow for ATM/spreads/IV/breakevens, cyan for structure, and gray for `n/a`. Preserve signs, arrows, labels, and range endpoints when color is disabled. Leave Greeks neutral because their signs are not inherently favorable without a position.
 
 Testing:
 - Mock every Upstox request; unit tests must make no live network calls.
 - Cover every qualifier, actual-contract expiry selection, exact-date and strike-count validation, request identity, token/gateway errors, response normalization, quote fallback, command routing/help, and ANSI rendering semantics.
+- Cover contextual and explicit `opt` grammar, comma/decimal strikes, exact-date selection, invalid-strike suggestions, extended option-side normalization, grouped full-quote mapping, full-quote fallback, all derived calculations, range bars, semantic ANSI colors, situational help, and the fixed four-request count.
 ```
 
 ## 20) Upstox Company Fundamentals Prompt

@@ -2534,6 +2534,52 @@ def _parse_chain_command(
     return _option_chain_target(target_input), request, None
 
 
+def _is_option_strike_token(value: str) -> bool:
+    """Return whether one token can represent a positive finite option strike."""
+    try:
+        parsed = float(value.replace(",", ""))
+    except ValueError:
+        return False
+    return math.isfinite(parsed) and parsed > 0
+
+
+def _parse_option_detail_command(
+    args: list[str],
+    current_symbol: str | None,
+) -> tuple[
+    _OptionChainTarget | None,
+    upstox_service.OptionDetailRequest | None,
+    str | None,
+]:
+    """Resolve contextual or explicit target grammar for an option strike detail."""
+    tokens = list(args)
+    if not tokens:
+        return None, None, f"Incomplete command. Usage: {upstox_service.OPTION_DETAIL_USAGE}"
+
+    # A numeric first token uses active context; otherwise it names an explicit target.
+    if current_symbol and _is_option_strike_token(tokens[0]):
+        target_input = current_symbol
+    elif not current_symbol and _is_option_strike_token(tokens[0]):
+        return (
+            None,
+            None,
+            "No active stock or index. Usage: opt <symbol|index> <strike> [qualifier]",
+        )
+    else:
+        target_input = tokens.pop(0)
+        if not tokens:
+            return (
+                None,
+                None,
+                "Incomplete command. Usage: opt <symbol|index> <strike> [qualifier]",
+            )
+
+    request, error = upstox_service.parse_option_detail_args(tokens)
+    if error:
+        return None, None, error
+    return _option_chain_target(target_input), request, None
+
+
 def _format_chain_scalar(value: float | None, precision: int) -> str:
     """Format one option-chain scalar without overflowing its seven-character cell."""
     if value is None:
@@ -2734,6 +2780,398 @@ def _print_option_chain(
             rows,
             quote,
             underlying.display_name,
+            resolved_contract.lot_size,
+        )
+    except upstox_service.UpstoxError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+    return 0
+
+
+def _format_option_detail_ltp(
+    side: upstox_service.OptionSide,
+) -> tuple[str, str]:
+    """Format one detail-view LTP with absolute and percentage daily movement."""
+    if side.ltp is None:
+        return "n/a", "gray"
+    if side.close_price in {None, 0.0}:
+        return f"{side.ltp:,.2f}  (n/a)", "gray"
+    change = side.ltp - side.close_price
+    pct = (change / side.close_price) * 100
+    arrow = " ↑" if change > 0 else " ↓" if change < 0 else ""
+    return (
+        f"{side.ltp:,.2f}  {change:+,.2f} ({pct:+.2f}%){arrow}",
+        _color_by_sign(change),
+    )
+
+
+def _format_option_market_level(price: float | None, quantity: float | None) -> str:
+    """Format one best bid or ask with its available quantity."""
+    if price is None:
+        return "n/a"
+    quantity_text = _fmt_compact_num(quantity)
+    return f"{price:,.2f} × {quantity_text}"
+
+
+def _format_option_spread(side: upstox_service.OptionSide) -> str:
+    """Format absolute and midpoint-relative top-of-book spread."""
+    if side.bid_price is None or side.ask_price is None or side.ask_price < side.bid_price:
+        return "n/a"
+    spread = side.ask_price - side.bid_price
+    midpoint = (side.ask_price + side.bid_price) / 2
+    pct = None if midpoint == 0 else (spread / midpoint) * 100
+    return f"{spread:,.2f} (n/a)" if pct is None else f"{spread:,.2f} ({pct:.2f}%)"
+
+
+def _format_signed_compact(value: float) -> str:
+    """Format a compact numeric change while retaining an explicit positive sign."""
+    rendered = _fmt_compact_num(value)
+    return f"+{rendered}" if value >= 0 else rendered
+
+
+def _format_option_oi_change(side: upstox_service.OptionSide) -> tuple[str, str]:
+    """Format OI movement from the previous-session value and its semantic color."""
+    if side.oi is None or side.prev_oi is None:
+        return "n/a", "gray"
+    change = side.oi - side.prev_oi
+    pct = None if side.prev_oi == 0 else (change / side.prev_oi) * 100
+    text = _format_signed_compact(change)
+    if pct is not None:
+        text = f"{text} ({pct:+.2f}%)"
+    return text, _color_by_sign(change)
+
+
+def _format_option_detail_scalar(
+    value: float | None,
+    precision: int = 2,
+    suffix: str = "",
+) -> str:
+    """Format one optional detail metric with fixed precision and a suffix."""
+    return "n/a" if value is None else f"{value:,.{precision}f}{suffix}"
+
+
+def _format_option_strike(value: float) -> str:
+    """Format an option strike without redundant decimal zeroes."""
+    return f"{value:,.2f}".rstrip("0").rstrip(".")
+
+
+def _print_option_detail_row(
+    label: str,
+    call_text: str,
+    put_text: str,
+    call_color: str | None = None,
+    put_color: str | None = None,
+    bold: bool = False,
+) -> None:
+    """Render one aligned call-versus-put metric row with optional semantic colors."""
+    metric_width = 27
+    side_width = 34
+    effective_call_color = "gray" if call_text == "n/a" else call_color
+    effective_put_color = "gray" if put_text == "n/a" else put_color
+    styled_call = _style_text(call_text, color=effective_call_color, bold=bold)
+    styled_put = _style_text(put_text, color=effective_put_color, bold=bold)
+    print(
+        f"{label:<{metric_width}}"
+        f"{_pad_cell(styled_call, side_width)}"
+        f"{styled_put}"
+    )
+
+
+def _print_option_detail_section(title: str) -> None:
+    """Render one visually distinct option-detail section heading."""
+    print(_style_text(title, color="cyan", bold=True))
+
+
+def _print_option_day_range(
+    label: str,
+    quote: upstox_service.FullMarketQuote | None,
+    fallback_current: float | None,
+    color: str,
+) -> None:
+    """Render one colored current-session range bar or a neutral unavailable marker."""
+    current = quote.last_price if quote is not None and quote.last_price is not None else fallback_current
+    low = quote.day_low if quote is not None else None
+    high = quote.day_high if quote is not None else None
+    values = (current, low, high)
+    if any(value is None or not math.isfinite(value) for value in values) or high <= low:
+        print(f"{label:<22}{_style_text('n/a', color='gray')}")
+        return
+    bar = _style_text(_range_line(low, high, current, width=40), color=color, bold=True)
+    print(f"{label:<22}{bar}  {low:,.2f} .. {high:,.2f}")
+
+
+def _option_moneyness(
+    spot: float,
+    strike: float,
+    option_type: Literal["call", "put"],
+    is_atm: bool,
+) -> str:
+    """Describe call or put moneyness using the live underlying gap."""
+    gap = abs(spot - strike)
+    if math.isclose(spot, strike, rel_tol=0.0, abs_tol=1e-9):
+        return "ATM"
+    if option_type == "call":
+        state = "ITM" if spot > strike else "OTM"
+    else:
+        state = "ITM" if spot < strike else "OTM"
+    prefix = "ATM · " if is_atm else ""
+    return f"{prefix}{state} by {gap:,.2f}"
+
+
+def _render_option_detail(
+    request: upstox_service.OptionDetailRequest,
+    row: upstox_service.OptionChainRow,
+    all_rows: list[upstox_service.OptionChainRow],
+    quotes: dict[str, upstox_service.FullMarketQuote],
+    underlying: upstox_service.OptionUnderlying,
+    lot_size: int | None,
+    now: dt.datetime | None = None,
+) -> None:
+    """Render a colored two-sided strike drill-down with range and value context."""
+    current_time = now or dt.datetime.now(ZoneInfo("Asia/Kolkata"))
+    underlying_quote = quotes.get(underlying.instrument_key)
+    spot = (
+        underlying_quote.last_price
+        if underlying_quote is not None and underlying_quote.last_price is not None
+        else row.spot
+    )
+    if spot is None:
+        raise upstox_service.UpstoxError(
+            f"Upstox returned no current {underlying.display_name} value."
+        )
+    previous_close = underlying_quote.close_price if underlying_quote is not None else None
+    change = None if previous_close in {None, 0.0} else spot - previous_close
+    pct = None if change is None else (change / previous_close) * 100
+    move_color = "gray" if change is None else _color_by_sign(change)
+    if change is None or pct is None:
+        move_text = "n/a"
+    else:
+        arrow = " ↑" if change > 0 else " ↓" if change < 0 else ""
+        move_text = f"{change:+,.2f} ({pct:+.2f}%){arrow}"
+
+    expiry_label = _format_chain_expiry_label(row.expiry)
+    try:
+        days = (dt.date.fromisoformat(row.expiry) - current_time.date()).days
+        day_word = "day" if days == 1 else "days"
+        days_label = f"{days} calendar {day_word}"
+    except ValueError:
+        days_label = "calendar days n/a"
+    atm_strike = min(
+        all_rows,
+        key=lambda candidate: (abs(candidate.strike - spot), candidate.strike),
+    ).strike
+    is_atm = math.isclose(row.strike, atm_strike, rel_tol=0.0, abs_tol=1e-6)
+    strike_suffix = " · ATM" if is_atm else ""
+    lot_text = "n/a" if lot_size is None else f"{lot_size:,}"
+
+    call_quote = quotes.get(row.call.instrument_key or "")
+    put_quote = quotes.get(row.put.instrument_key or "")
+    call_move_color = _option_side_color(row.call)
+    put_move_color = _option_side_color(row.put)
+
+    print()
+    print(
+        f"{_style_text(underlying.display_name.upper(), bold=True)}  "
+        f"{_style_text(f'{spot:,.2f}  {move_text}', color=move_color, bold=True)}"
+    )
+    print(
+        _style_text(
+            f"OPTION DETAIL · {request.qualifier.upper()} · "
+            f"Expiry {expiry_label} · {days_label}",
+            color="cyan",
+            bold=True,
+        )
+    )
+    fetched = current_time.strftime("%d-%m-%Y %H:%M:%S IST")
+    print(
+        _style_text(
+            f"Strike {_format_option_strike(row.strike)}{strike_suffix} · Lot size {lot_text} · "
+            f"Fetched {fetched} · Upstox",
+            color="yellow",
+            bold=True,
+        )
+    )
+    print()
+    _print_option_day_range("Underlying Day Range", underlying_quote, spot, move_color)
+    _print_option_day_range("CALL Day Range", call_quote, row.call.ltp, call_move_color)
+    _print_option_day_range("PUT Day Range", put_quote, row.put.ltp, put_move_color)
+
+    print()
+    _print_option_detail_row(
+        "",
+        "CALL (CE)",
+        "PUT (PE)",
+        call_color="cyan",
+        put_color="cyan",
+        bold=True,
+    )
+    print("─" * 95)
+    _print_option_detail_section("PRICE & LIQUIDITY")
+    call_ltp, call_ltp_color = _format_option_detail_ltp(row.call)
+    put_ltp, put_ltp_color = _format_option_detail_ltp(row.put)
+    _print_option_detail_row("LTP / Today", call_ltp, put_ltp, call_ltp_color, put_ltp_color)
+    _print_option_detail_row(
+        "Best bid",
+        _format_option_market_level(row.call.bid_price, row.call.bid_qty),
+        _format_option_market_level(row.put.bid_price, row.put.bid_qty),
+        "green",
+        "green",
+    )
+    _print_option_detail_row(
+        "Best ask",
+        _format_option_market_level(row.call.ask_price, row.call.ask_qty),
+        _format_option_market_level(row.put.ask_price, row.put.ask_qty),
+        "red",
+        "red",
+    )
+    _print_option_detail_row(
+        "Bid/ask spread",
+        _format_option_spread(row.call),
+        _format_option_spread(row.put),
+        "yellow",
+        "yellow",
+    )
+    _print_option_detail_row("Volume", _fmt_compact_num(row.call.volume), _fmt_compact_num(row.put.volume))
+    _print_option_detail_row("Open interest", _fmt_compact_num(row.call.oi), _fmt_compact_num(row.put.oi))
+    call_oi_change, call_oi_color = _format_option_oi_change(row.call)
+    put_oi_change, put_oi_color = _format_option_oi_change(row.put)
+    _print_option_detail_row(
+        "Change in OI",
+        call_oi_change,
+        put_oi_change,
+        call_oi_color,
+        put_oi_color,
+    )
+
+    print()
+    _print_option_detail_section("RISK & GREEKS")
+    _print_option_detail_row(
+        "Implied volatility",
+        _format_option_detail_scalar(row.call.iv, suffix="%"),
+        _format_option_detail_scalar(row.put.iv, suffix="%"),
+        "yellow",
+        "yellow",
+    )
+    _print_option_detail_row(
+        "Delta",
+        _format_option_detail_scalar(row.call.delta, 3),
+        _format_option_detail_scalar(row.put.delta, 3),
+    )
+    _print_option_detail_row(
+        "Gamma",
+        _format_option_detail_scalar(row.call.gamma, 4),
+        _format_option_detail_scalar(row.put.gamma, 4),
+    )
+    _print_option_detail_row(
+        "Theta",
+        _format_option_detail_scalar(row.call.theta),
+        _format_option_detail_scalar(row.put.theta),
+    )
+    _print_option_detail_row(
+        "Vega",
+        _format_option_detail_scalar(row.call.vega),
+        _format_option_detail_scalar(row.put.vega),
+    )
+
+    # Value rows are objective long-premium calculations and exclude fees or margin effects.
+    call_intrinsic = max(spot - row.strike, 0.0)
+    put_intrinsic = max(row.strike - spot, 0.0)
+    call_time = None if row.call.ltp is None else row.call.ltp - call_intrinsic
+    put_time = None if row.put.ltp is None else row.put.ltp - put_intrinsic
+    call_premium = None if row.call.ltp is None or lot_size is None else row.call.ltp * lot_size
+    put_premium = None if row.put.ltp is None or lot_size is None else row.put.ltp * lot_size
+    call_breakeven = None if row.call.ltp is None else row.strike + row.call.ltp
+    put_breakeven = None if row.put.ltp is None else row.strike - row.put.ltp
+
+    print()
+    _print_option_detail_section("VALUE AT CURRENT PREMIUM")
+    _print_option_detail_row(
+        "Moneyness",
+        _option_moneyness(spot, row.strike, "call", is_atm),
+        _option_moneyness(spot, row.strike, "put", is_atm),
+        "yellow" if is_atm else None,
+        "yellow" if is_atm else None,
+    )
+    _print_option_detail_row(
+        "Intrinsic value",
+        _format_option_detail_scalar(call_intrinsic),
+        _format_option_detail_scalar(put_intrinsic),
+    )
+    _print_option_detail_row(
+        "Time value",
+        _format_option_detail_scalar(call_time),
+        _format_option_detail_scalar(put_time),
+    )
+    _print_option_detail_row(
+        "Premium per lot",
+        "n/a" if call_premium is None else f"₹{call_premium:,.2f}",
+        "n/a" if put_premium is None else f"₹{put_premium:,.2f}",
+        bold=True,
+    )
+    _print_option_detail_row(
+        "Expiry breakeven",
+        _format_option_detail_scalar(call_breakeven),
+        _format_option_detail_scalar(put_breakeven),
+        "yellow",
+        "yellow",
+    )
+
+
+def _print_option_detail(
+    target: _OptionChainTarget,
+    request: upstox_service.OptionDetailRequest,
+) -> int:
+    """Resolve, fetch, and render one Upstox option strike drill-down."""
+    try:
+        token = upstox_service.load_analytics_token()
+        _track_network_call("upstox.instrument_search")
+        underlying = upstox_service.resolve_option_underlying(
+            token,
+            target.query,
+            preferred_exchange=target.preferred_exchange,
+        )
+        chain_request = upstox_service.ChainRequest(
+            request.qualifier,
+            request.expiry_value,
+        )
+        _track_network_call("upstox.option_contract")
+        resolved_contract = upstox_service.resolve_chain_contract(
+            token,
+            chain_request,
+            underlying.instrument_key,
+            underlying.display_name,
+        )
+        _track_network_call("upstox.option_chain")
+        rows = upstox_service.fetch_option_chain(
+            token,
+            resolved_contract.expiry,
+            instrument_key=underlying.instrument_key,
+        )
+        selected = upstox_service.find_option_strike(
+            rows,
+            request.strike,
+            underlying.display_name,
+            resolved_contract.expiry,
+        )
+
+        # One grouped quote replaces an underlying-only LTP request and supplies all range bars.
+        instrument_keys = [
+            underlying.instrument_key,
+            selected.call.instrument_key or "",
+            selected.put.instrument_key or "",
+        ]
+        quotes: dict[str, upstox_service.FullMarketQuote] = {}
+        try:
+            _track_network_call("upstox.market_quote")
+            quotes = upstox_service.fetch_full_market_quotes(token, instrument_keys)
+        except upstox_service.UpstoxError:
+            quotes = {}
+        _render_option_detail(
+            request,
+            selected,
+            rows,
+            quotes,
+            underlying,
             resolved_contract.lot_size,
         )
     except upstox_service.UpstoxError as exc:
@@ -3772,6 +4210,21 @@ def _run_repl(
                 assert chain_target is not None
                 assert chain_request is not None
                 _print_option_chain(chain_target, chain_request)
+                continue
+            if lower == "opt" or lower.startswith("opt ") or lower == "option" or lower.startswith("option "):
+                # Watchlist prompts require an explicit target even if an older symbol remains in context.
+                parts = cmd.split()
+                active_option_symbol = None if context.watchlist_name else context.symbol
+                detail_target, detail_request, parse_error = _parse_option_detail_command(
+                    parts[1:],
+                    active_option_symbol,
+                )
+                if parse_error:
+                    print(parse_error, file=sys.stderr)
+                    continue
+                assert detail_target is not None
+                assert detail_request is not None
+                _print_option_detail(detail_target, detail_request)
                 continue
             if lower == "move" or lower.startswith("move ") or lower == "moves" or lower.startswith("moves "):
                 parts = cmd.split()

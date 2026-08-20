@@ -44,7 +44,7 @@ uv run tickertrail
 - View swing and intraday charts in terminal
 - Compare stocks vs benchmark (`cmp`, `t`, `tt`)
 - Open index boards and constituent snapshots (`index`, `snap`)
-- Inspect stock and index F&O chains with live Upstox prices and Greeks (`chain` / `oc`)
+- Inspect stock and index F&O chains and drill into one strike with live Upstox prices and Greeks (`chain` / `oc`, `opt` / `option`)
 - Review consolidated company fundamentals from Upstox (`fundmentals` / `funda`)
 - Build and manage persistent watchlists
 - Run analytics boards (`move`, `trend`, `relret`/`rr`, `corr`)
@@ -114,7 +114,7 @@ Situational help follows a uniform rule at every prompt: bare `?` lists commands
   - `trend` runs over index constituents when available.
   - `relret` runs over index constituents with an index-appropriate benchmark.
   - `corr` runs over index constituents and needs at least two valid overlapping series.
-- In any Indian stock/index mode, `chain` / `oc` shows its option chain when Upstox lists F&O contracts.
+- In any Indian stock/index mode, `chain` / `oc` shows its option chain and `opt` / `option` drills into an exactly listed strike when Upstox lists F&O contracts.
 
 ### 3) Watchlist mode (`tt>watchlist>sharekhan>`)
 
@@ -461,6 +461,24 @@ For every qualifier—including an exact date—TickerTrail first reads the sele
 The optional `strikes <1-25>` modifier controls how many strikes are shown on each side of ATM; the default is 10. The chain is ordered from higher strikes at the top to lower strikes at the bottom. Calls are on the left, puts on the right, and the strike spine is centered and bold. Headers and the complete ATM row are bold. Each call/put half is independently colored by its daily move, and LTP shows that move in brackets. The compact table shows LTP, Delta immediately beside it, Theta, volume, and OI; IV, Gamma, and Vega are omitted so the table fits within 120 columns for typical values. The heading shows the selected underlying's current value and its absolute and percentage move. The metadata line shows the lot size for the selected expiry, reusing the existing option-contract response without another network call; unavailable or inconsistent values render as `n/a`.
 
 Use `chain ?`, `oc ?`, or `help chain` for situational help. In a stock/index prompt, help shows only contextual forms such as `chain next`; at root or in a watchlist, it shows explicit forms such as `chain hdfcbank next`. Upstox access is read-only in this feature and never falls back to another data source. HTTP requests identify TickerTrail explicitly so Upstox's gateway does not reject Python's default client signature; API, authentication, and gateway errors remain distinct in CLI output.
+
+To inspect both the call and put at one strike, use the strike-detail command:
+
+```text
+tt>index>nifty> opt 24200
+tt>index>nifty> opt 24,200 next
+tt>index>nifty> opt 24200 expiry 2026-08-27
+tt>stock>reliance> option 1400 month
+tt> opt nifty 24200 next
+```
+
+`opt` and `option` are equivalent. In a stock/index prompt, the first value is the strike; from root or a watchlist, name the stock/index before the strike. The default expiry is `near`, and every relative or exact qualifier follows the same listed-contract calendar rules as `chain`. Strikes may contain grouping commas or decimals, but must exactly match a strike listed for the selected expiry. TickerTrail never silently substitutes another strike; an invalid strike reports up to three nearby listed values.
+
+The detail view compares CE and PE side-by-side. It shows the underlying, call, and put day-range bars; LTP with absolute and percentage daily move; best bid/ask and quantities; midpoint-relative spread; volume; OI and change in OI; IV, Delta, Gamma, Theta, and Vega; moneyness; intrinsic and time value; premium per lot; and expiry breakeven. Premium and breakeven are objective long-premium calculations at the displayed LTP and exclude fees, taxes, slippage, and margin effects. A bare `opt 24200` always means `near` rather than inheriting a previously viewed chain expiry.
+
+Color remains redundant with text: positive price/OI changes and bids are green; negative changes and asks are red; ATM, spreads, IV, and breakevens are yellow; structural headings are cyan; and unavailable values are gray. Signs, arrows, labels, and numeric endpoints keep the view readable with ANSI disabled. Each range bar uses that instrument's own day low/high scale. Missing full-quote ranges render as `n/a` without hiding chain-derived details.
+
+The detail workflow uses four Upstox requests: instrument search, option-contract calendar, selected-expiry chain, and one batched full-market quote for the underlying plus the CE/PE instrument keys. That grouped quote supplies all three day ranges and replaces a separate underlying-only LTP request. No request falls back to Yahoo. Use `opt ?`, `option ?`, or `help opt` for situational grammar.
 
 ## Charts and Tables
 
